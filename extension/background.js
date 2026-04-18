@@ -7,7 +7,7 @@ const MAX_BATCH_SIZE = 100;
 const MAX_BUFFER_EVENTS = 3000;
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
-const INTEGER_FIELDS = new Set(["scroll_delta", "keystrokes", "clicks"]);
+const INTEGER_FIELDS = new Set(["scroll_delta"]);
 
 const REQUIRED_ENV_KEYS = [
   "INFLUX_URL",
@@ -18,7 +18,6 @@ const REQUIRED_ENV_KEYS = [
 
 const eventBuffer = [];
 const activeTabByWindow = new Map();
-const activityByTab = new Map();
 
 let influxConfig = null;
 let flushInProgress = false;
@@ -102,13 +101,6 @@ function extractDomain(url) {
   }
 }
 
-function getActivity(tabId) {
-  if (!activityByTab.has(tabId)) {
-    activityByTab.set(tabId, { clicks: 0, keystrokes: 0 });
-  }
-  return activityByTab.get(tabId);
-}
-
 function escapeMeasurement(value) {
   return value.replace(/\\/g, "\\\\").replace(/,/g, "\\,").replace(/ /g, "\\ ");
 }
@@ -150,9 +142,7 @@ function createEvent(domain, eventType, metrics = {}) {
   const safeMetrics = {
     duration: Number(metrics.duration || 0),
     scroll_delta: Number(metrics.scroll_delta || 0),
-    scroll_depth: Number(metrics.scroll_depth || 0),
-    keystrokes: Number(metrics.keystrokes || 0),
-    clicks: Number(metrics.clicks || 0)
+    scroll_depth: Number(metrics.scroll_depth || 0)
   };
 
   return {
@@ -279,20 +269,15 @@ function emitFocusHeartbeat() {
     }
 
     const elapsedSec = Math.max((now - state.started_at_ms) / 1000, 0);
-    const activity = getActivity(state.tab_id);
 
     enqueueEvent(
       createEvent(state.domain, "focus", {
-        duration: elapsedSec,
-        keystrokes: activity.keystrokes,
-        clicks: activity.clicks
+        duration: elapsedSec
       })
     );
 
     state.started_at_ms = now;
     activeTabByWindow.set(windowId, state);
-    activity.keystrokes = 0;
-    activity.clicks = 0;
   }
 }
 
@@ -319,18 +304,12 @@ async function handleTabActivated(activeInfo) {
 
   if (previous && previous.tab_id !== activeInfo.tabId) {
     const elapsedSec = Math.max((now - previous.started_at_ms) / 1000, 0);
-    const activity = getActivity(previous.tab_id);
 
     enqueueEvent(
       createEvent(previous.domain, "switch", {
-        duration: elapsedSec,
-        keystrokes: activity.keystrokes,
-        clicks: activity.clicks
+        duration: elapsedSec
       })
     );
-
-    activity.keystrokes = 0;
-    activity.clicks = 0;
   }
 
   activeTabByWindow.set(activeInfo.windowId, {
@@ -359,18 +338,13 @@ function handleTabUpdated(tabId, changeInfo, tab) {
 
   const now = Date.now();
   const elapsedSec = Math.max((now - current.started_at_ms) / 1000, 0);
-  const activity = getActivity(tabId);
 
   enqueueEvent(
     createEvent(current.domain, "switch", {
-      duration: elapsedSec,
-      keystrokes: activity.keystrokes,
-      clicks: activity.clicks
+      duration: elapsedSec
     })
   );
 
-  activity.keystrokes = 0;
-  activity.clicks = 0;
   current.domain = newDomain;
   current.started_at_ms = now;
   activeTabByWindow.set(tab.windowId, current);
@@ -381,24 +355,19 @@ function handleTabUpdated(tabId, changeInfo, tab) {
 function handleTabRemoved(tabId, removeInfo) {
   const current = activeTabByWindow.get(removeInfo.windowId);
   if (!current || current.tab_id !== tabId) {
-    activityByTab.delete(tabId);
     return;
   }
 
   const now = Date.now();
   const elapsedSec = Math.max((now - current.started_at_ms) / 1000, 0);
-  const activity = getActivity(tabId);
 
   enqueueEvent(
     createEvent(current.domain, "switch", {
-      duration: elapsedSec,
-      keystrokes: activity.keystrokes,
-      clicks: activity.clicks
+      duration: elapsedSec
     })
   );
 
   activeTabByWindow.delete(removeInfo.windowId);
-  activityByTab.delete(tabId);
 }
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
@@ -418,12 +387,9 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     return;
   }
 
-  const tabId = sender.tab.id;
   const domain = extractDomain(message.url || sender.tab.url);
-  const activity = getActivity(tabId);
-
-  activity.clicks += Number(message.clicks || 0);
-  activity.keystrokes += Number(message.keystrokes || 0);
+  // Click and keyboard aggregation intentionally disabled:
+  // background worker forwards scroll-only events.
 
   const scrollDelta = Number(message.scroll_delta || 0);
   const scrollDepth = Number(message.scroll_depth || 0);

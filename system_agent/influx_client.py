@@ -1,52 +1,19 @@
 from __future__ import annotations
 
 import logging
-import math
 import threading
 import time
-from typing import Any, Dict, Iterable, List
+from typing import Iterable, List
 
 import requests
 
 
 def now_ns() -> int:
-    """Return the current timestamp in nanoseconds."""
     return time.time_ns()
 
 
-def _escape_measurement(value: str) -> str:
-    return value.replace("\\", "\\\\").replace(",", "\\,").replace(" ", "\\ ")
-
-
-def _escape_tag(value: str) -> str:
-    return (
-        value.replace("\\", "\\\\")
-        .replace(",", "\\,")
-        .replace(" ", "\\ ")
-        .replace("=", "\\=")
-    )
-
-
-def _escape_field_key(value: str) -> str:
-    return value.replace("\\", "\\\\").replace(",", "\\,").replace(" ", "\\ ")
-
-
-def _format_field_value(value: Any) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int) and not isinstance(value, bool):
-        return f"{value}i"
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            value = 0.0
-        return f"{value:.6f}".rstrip("0").rstrip(".") or "0"
-
-    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{text}"'
-
-
 class InfluxBatchClient:
-    """Buffered InfluxDB v2 writer using line protocol."""
+    """Simple line-protocol batch writer for InfluxDB v2."""
 
     def __init__(
         self,
@@ -54,8 +21,7 @@ class InfluxBatchClient:
         token: str,
         org: str,
         bucket: str,
-        measurement: str = "behavior_events",
-        batch_size: int = 100,
+        batch_size: int = 200,
         flush_interval: float = 3.0,
         max_retries: int = 3,
         request_timeout: float = 10.0,
@@ -65,7 +31,6 @@ class InfluxBatchClient:
         self.token = token
         self.org = org
         self.bucket = bucket
-        self.measurement = measurement
         self.batch_size = batch_size
         self.flush_interval = flush_interval
         self.max_retries = max_retries
@@ -88,7 +53,7 @@ class InfluxBatchClient:
             return
         self._started = True
         self._flush_thread.start()
-        logging.info("Influx batch writer started with %.1fs interval", self.flush_interval)
+        logging.info("Influx batch writer started (flush_interval=%.1fs)", self.flush_interval)
 
     def stop(self) -> None:
         if not self._started:
@@ -99,25 +64,24 @@ class InfluxBatchClient:
         self._started = False
         logging.info("Influx batch writer stopped")
 
-    def enqueue_event(self, event: Dict[str, Any]) -> None:
-        line = self.event_to_line(event)
-        if not line:
+    def enqueue_line(self, line: str) -> None:
+        clean_line = line.strip()
+        if not clean_line:
             return
 
         should_flush = False
         with self._lock:
-            self._buffer.append(line)
+            self._buffer.append(clean_line)
             if len(self._buffer) > self.max_buffer_lines:
-                # Keep the newest data if connection is down for a long time.
                 self._buffer = self._buffer[-self.max_buffer_lines :]
             should_flush = len(self._buffer) >= self.batch_size
 
         if should_flush:
             self.flush()
 
-    def enqueue_events(self, events: Iterable[Dict[str, Any]]) -> None:
-        for event in events:
-            self.enqueue_event(event)
+    def enqueue_lines(self, lines: Iterable[str]) -> None:
+        for line in lines:
+            self.enqueue_line(line)
 
     def flush(self) -> None:
         with self._lock:
@@ -141,11 +105,7 @@ class InfluxBatchClient:
             self.flush()
 
     def _write_with_retry(self, payload: str) -> bool:
-        params = {
-            "org": self.org,
-            "bucket": self.bucket,
-            "precision": "ns",
-        }
+        params = {"org": self.org, "bucket": self.bucket, "precision": "ns"}
         headers = {
             "Authorization": f"Token {self.token}",
             "Content-Type": "text/plain; charset=utf-8",
@@ -185,39 +145,4 @@ class InfluxBatchClient:
                 backoff_seconds *= 2
 
         return False
-
-    def event_to_line(self, event: Dict[str, Any]) -> str:
-        measurement = _escape_measurement(event.get("measurement", self.measurement))
-        tags = event.get("tags", {})
-        fields = event.get("fields", {})
-        timestamp = int(event.get("timestamp", now_ns()))
-
-        if not fields:
-            return ""
-
-        tag_part = ""
-        if tags:
-            rendered_tags = []
-            for key, value in tags.items():
-                if value is None:
-                    continue
-                rendered_tags.append(
-                    f"{_escape_tag(str(key))}={_escape_tag(str(value))}"
-                )
-            if rendered_tags:
-                tag_part = "," + ",".join(rendered_tags)
-
-        field_pairs = []
-        for key, value in fields.items():
-            if value is None:
-                continue
-            field_pairs.append(
-                f"{_escape_field_key(str(key))}={_format_field_value(value)}"
-            )
-
-        if not field_pairs:
-            return ""
-
-        field_part = ",".join(field_pairs)
-        return f"{measurement}{tag_part} {field_part} {timestamp}"
 

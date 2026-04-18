@@ -43,7 +43,6 @@ def main() -> int:
         token=influx_token,
         org=influx_org,
         bucket=influx_bucket,
-        measurement="behavior_events",
         batch_size=100,
         flush_interval=3.0,
         max_retries=3,
@@ -54,6 +53,7 @@ def main() -> int:
         user_id="u1",
         poll_interval=0.5,
         emit_interval=3.0,
+        merge_flush_threshold=6.0,
     )
 
     def _handle_signal(_signum: int, _frame: object) -> None:
@@ -74,4 +74,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

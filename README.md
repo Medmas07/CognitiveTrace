@@ -2,8 +2,8 @@
 
 This project contains two collectors that write raw behavioral events directly to InfluxDB v2 using line protocol (no JSON storage layer):
 
-- `system_agent/`: desktop app/input collector in Python
-- `extension/`: Chrome extension for browser tab/scroll/activity tracking
+- `system_agent/`: desktop app focus/switch/idle collector in Python
+- `extension/`: Chrome extension for browser tab/scroll tracking
 
 ## 1) Configure Environment
 
@@ -52,7 +52,7 @@ from(bucket: "YOUR_BUCKET")
 Common tags:
 - `user_id` (`u1`)
 - `source_type` (`app` or `tab`)
-- `event_type` (`focus`, `switch`, `input`, `scroll`)
+- `event_type` (`focus`, `switch`, `idle`, `scroll`)
 
 Additional tags:
 - System agent: `app_name`
@@ -60,10 +60,5 @@ Additional tags:
 
 Common fields include:
 - `duration`
-- `keystrokes`
-- `mouse_speed`
 - `scroll_delta`
 - `scroll_depth`
-- `clicks`
-- `window_title` (system agent)
-

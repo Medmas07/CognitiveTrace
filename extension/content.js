@@ -3,9 +3,7 @@
 
   const pending = {
     scroll_delta: 0,
-    scroll_depth: 0,
-    clicks: 0,
-    keystrokes: 0
+    scroll_depth: 0
   };
 
   let lastScrollY = window.scrollY;
@@ -26,19 +24,12 @@
   }
 
   function hasPendingData() {
-    return (
-      pending.scroll_delta !== 0 ||
-      pending.scroll_depth > 0 ||
-      pending.clicks > 0 ||
-      pending.keystrokes > 0
-    );
+    return pending.scroll_delta !== 0 || pending.scroll_depth > 0;
   }
 
   function resetPending() {
     pending.scroll_delta = 0;
     pending.scroll_depth = 0;
-    pending.clicks = 0;
-    pending.keystrokes = 0;
   }
 
   function flushPending() {
@@ -51,9 +42,7 @@
       type: "page_activity",
       url: window.location.href,
       scroll_delta: pending.scroll_delta,
-      scroll_depth: pending.scroll_depth,
-      clicks: pending.clicks,
-      keystrokes: pending.keystrokes
+      scroll_depth: pending.scroll_depth
     };
 
     chrome.runtime.sendMessage(payload, () => {
@@ -82,32 +71,8 @@
     { passive: true }
   );
 
-  window.addEventListener(
-    "click",
-    () => {
-      pending.clicks += 1;
-      scheduleFlush();
-    },
-    true
-  );
-
-  window.addEventListener(
-    "keydown",
-    (event) => {
-      // Count printable keys plus common editing/navigation keys.
-      if (
-        event.key.length === 1 ||
-        event.key === "Backspace" ||
-        event.key === "Enter" ||
-        event.key === "Tab" ||
-        event.key === "Delete"
-      ) {
-        pending.keystrokes += 1;
-        scheduleFlush();
-      }
-    },
-    true
-  );
+  // Click and keyboard tracking intentionally disabled:
+  // keep this content script focused on scroll-only behavior.
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
@@ -117,4 +82,3 @@
 
   window.addEventListener("beforeunload", flushPending);
 })();
-
