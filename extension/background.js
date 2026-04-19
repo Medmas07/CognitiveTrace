@@ -2,7 +2,8 @@ const USER_ID = "u1";
 const SOURCE_TYPE = "tab";
 const MEASUREMENT = "behavior_events";
 
-const BATCH_INTERVAL_MS = 3000;
+const FLUSH_INTERVAL_MS = 3000;
+const HEARTBEAT_INTERVAL_MS = 30000;
 const MAX_BATCH_SIZE = 100;
 const MAX_BUFFER_EVENTS = 3000;
 const MAX_RETRIES = 3;
@@ -22,6 +23,7 @@ const activeTabByWindow = new Map();
 let influxConfig = null;
 let flushInProgress = false;
 let lastFlushMs = Date.now();
+let lastSignalMs = Date.now();
 
 const configLoadPromise = loadInfluxConfig();
 
@@ -157,6 +159,22 @@ function createEvent(domain, eventType, metrics = {}) {
   };
 }
 
+function logEventToConsole(event, details = {}) {
+  const eventType = event?.tags?.event_type || "unknown";
+  const domain = event?.tags?.domain || "unknown";
+  console.info("[Behavior Browser Agent]", {
+    event_type: eventType,
+    domain,
+    tab_id: details.tab_id ?? null,
+    window_id: details.window_id ?? null,
+    tab_title: details.tab_title ?? "",
+    tab_url: details.tab_url ?? "",
+    duration: Number(event?.fields?.duration || 0),
+    scroll_delta: Number(event?.fields?.scroll_delta || 0),
+    scroll_depth: Number(event?.fields?.scroll_depth || 0)
+  });
+}
+
 function toLineProtocol(event) {
   const measurement = escapeMeasurement(MEASUREMENT);
   const tags = Object.entries(event.tags)
@@ -170,14 +188,17 @@ function toLineProtocol(event) {
   return `${measurement},${tags} ${fields} ${event.timestamp_ns}`;
 }
 
-function enqueueEvent(event) {
+function enqueueEvent(event, details = {}) {
   eventBuffer.push(event);
+  lastSignalMs = Date.now();
+  logEventToConsole(event, details);
+
   if (eventBuffer.length > MAX_BUFFER_EVENTS) {
     eventBuffer.splice(0, eventBuffer.length - MAX_BUFFER_EVENTS);
   }
 
   const elapsed = Date.now() - lastFlushMs;
-  if (eventBuffer.length >= MAX_BATCH_SIZE || elapsed >= BATCH_INTERVAL_MS) {
+  if (eventBuffer.length >= MAX_BATCH_SIZE || elapsed >= FLUSH_INTERVAL_MS) {
     void flushBuffer();
   }
 }
@@ -262,6 +283,9 @@ async function flushBuffer() {
 
 function emitFocusHeartbeat() {
   const now = Date.now();
+  if (now - lastSignalMs < HEARTBEAT_INTERVAL_MS) {
+    return;
+  }
 
   for (const [windowId, state] of activeTabByWindow.entries()) {
     if (!state) {
@@ -273,7 +297,13 @@ function emitFocusHeartbeat() {
     enqueueEvent(
       createEvent(state.domain, "focus", {
         duration: elapsedSec
-      })
+      }),
+      {
+        tab_id: state.tab_id,
+        window_id: windowId,
+        tab_title: state.title || "",
+        tab_url: state.url || ""
+      }
     );
 
     state.started_at_ms = now;
@@ -291,6 +321,8 @@ async function bootstrapActiveTabs() {
     activeTabByWindow.set(tab.windowId, {
       tab_id: tab.id,
       domain: extractDomain(tab.url),
+      url: tab.url || "",
+      title: tab.title || "",
       started_at_ms: now
     });
   }
@@ -308,17 +340,30 @@ async function handleTabActivated(activeInfo) {
     enqueueEvent(
       createEvent(previous.domain, "switch", {
         duration: elapsedSec
-      })
+      }),
+      {
+        tab_id: previous.tab_id,
+        window_id: activeInfo.windowId,
+        tab_title: previous.title || "",
+        tab_url: previous.url || ""
+      }
     );
   }
 
   activeTabByWindow.set(activeInfo.windowId, {
     tab_id: activeInfo.tabId,
     domain,
+    url: tab.url || "",
+    title: tab.title || "",
     started_at_ms: now
   });
 
-  enqueueEvent(createEvent(domain, "focus", { duration: 0 }));
+  enqueueEvent(createEvent(domain, "focus", { duration: 0 }), {
+    tab_id: activeInfo.tabId,
+    window_id: activeInfo.windowId,
+    tab_title: tab.title || "",
+    tab_url: tab.url || ""
+  });
 }
 
 function handleTabUpdated(tabId, changeInfo, tab) {
@@ -342,14 +387,27 @@ function handleTabUpdated(tabId, changeInfo, tab) {
   enqueueEvent(
     createEvent(current.domain, "switch", {
       duration: elapsedSec
-    })
+    }),
+    {
+      tab_id: tabId,
+      window_id: tab.windowId,
+      tab_title: current.title || "",
+      tab_url: current.url || ""
+    }
   );
 
   current.domain = newDomain;
+  current.url = tab.url || changeInfo.url || "";
+  current.title = tab.title || "";
   current.started_at_ms = now;
   activeTabByWindow.set(tab.windowId, current);
 
-  enqueueEvent(createEvent(newDomain, "focus", { duration: 0 }));
+  enqueueEvent(createEvent(newDomain, "focus", { duration: 0 }), {
+    tab_id: tabId,
+    window_id: tab.windowId,
+    tab_title: current.title || "",
+    tab_url: current.url || ""
+  });
 }
 
 function handleTabRemoved(tabId, removeInfo) {
@@ -364,7 +422,13 @@ function handleTabRemoved(tabId, removeInfo) {
   enqueueEvent(
     createEvent(current.domain, "switch", {
       duration: elapsedSec
-    })
+    }),
+    {
+      tab_id: tabId,
+      window_id: removeInfo.windowId,
+      tab_title: current.title || "",
+      tab_url: current.url || ""
+    }
   );
 
   activeTabByWindow.delete(removeInfo.windowId);
@@ -383,13 +447,46 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender) => {
-  if (message?.type !== "page_activity" || !sender.tab || sender.tab.id == null) {
+  if (!sender.tab || sender.tab.id == null) {
     return;
   }
 
-  const domain = extractDomain(message.url || sender.tab.url);
-  // Click and keyboard aggregation intentionally disabled:
-  // background worker forwards scroll-only events.
+  const tabId = sender.tab.id;
+  const windowId = sender.tab.windowId;
+  const tabUrl = sender.tab.url || message?.url || "";
+  const tabTitle = sender.tab.title || "";
+  const domain = extractDomain(tabUrl);
+  const current = activeTabByWindow.get(windowId);
+  if (current && current.tab_id === tabId) {
+    current.url = tabUrl;
+    current.title = tabTitle;
+    activeTabByWindow.set(windowId, current);
+  }
+
+  if (message?.type === "page_interrupt") {
+    if (current && current.tab_id === tabId) {
+      const now = Date.now();
+      const elapsedSec = Math.max((now - current.started_at_ms) / 1000, 0);
+      if (elapsedSec >= 1) {
+        enqueueEvent(
+          createEvent(current.domain, "focus", { duration: elapsedSec }),
+          {
+            tab_id: tabId,
+            window_id: windowId,
+            tab_title: tabTitle,
+            tab_url: tabUrl
+          }
+        );
+      }
+      current.started_at_ms = now;
+      activeTabByWindow.set(windowId, current);
+    }
+    return;
+  }
+
+  if (message?.type !== "page_activity") {
+    return;
+  }
 
   const scrollDelta = Number(message.scroll_delta || 0);
   const scrollDepth = Number(message.scroll_depth || 0);
@@ -398,7 +495,13 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       createEvent(domain, "scroll", {
         scroll_delta: scrollDelta,
         scroll_depth: scrollDepth
-      })
+      }),
+      {
+        tab_id: tabId,
+        window_id: windowId,
+        tab_title: tabTitle,
+        tab_url: tabUrl
+      }
     );
   }
 });
@@ -414,6 +517,9 @@ chrome.runtime.onStartup.addListener(() => {
 void bootstrapActiveTabs();
 
 setInterval(() => {
-  emitFocusHeartbeat();
   void flushBuffer();
-}, BATCH_INTERVAL_MS);
+}, FLUSH_INTERVAL_MS);
+
+setInterval(() => {
+  emitFocusHeartbeat();
+}, HEARTBEAT_INTERVAL_MS);

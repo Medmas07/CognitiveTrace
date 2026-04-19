@@ -23,12 +23,17 @@ def _format_float(value: float) -> str:
     return text
 
 
+def _escape_field_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 @dataclass
 class Event:
     timestamp: int
     app_name: str
     event_type: str
     duration: float
+    window_title: str = ""
     user_id: str = "u1"
     source_type: str = "app"
     measurement: str = "behavior_events"
@@ -45,5 +50,6 @@ class Event:
             for key, value in tags.items()
         )
         duration = _format_float(max(0.0, self.duration))
-        return f"{_escape_measurement(self.measurement)},{tag_str} duration={duration} {self.timestamp}"
-
+        safe_title = _escape_field_string((self.window_title or "")[:240])
+        fields = f'duration={duration},window_title="{safe_title}"'
+        return f"{_escape_measurement(self.measurement)},{tag_str} {fields} {self.timestamp}"

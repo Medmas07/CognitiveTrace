@@ -80,5 +80,22 @@
     }
   });
 
+  function sendInterrupt(reason) {
+    chrome.runtime.sendMessage(
+      {
+        type: "page_interrupt",
+        reason,
+        url: window.location.href
+      },
+      () => {
+        void chrome.runtime.lastError;
+      }
+    );
+  }
+
+  document.addEventListener("copy", () => sendInterrupt("copy"), true);
+  document.addEventListener("paste", () => sendInterrupt("paste"), true);
+  document.addEventListener("cut", () => sendInterrupt("cut"), true);
+
   window.addEventListener("beforeunload", flushPending);
 })();

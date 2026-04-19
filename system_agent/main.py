@@ -52,8 +52,8 @@ def main() -> int:
         influx_client=influx_client,
         user_id="u1",
         poll_interval=0.5,
-        emit_interval=3.0,
-        merge_flush_threshold=6.0,
+        emit_interval=30.0,
+        merge_flush_threshold=30.0,
     )
 
     def _handle_signal(_signum: int, _frame: object) -> None:
