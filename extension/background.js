@@ -4,6 +4,7 @@ const MEASUREMENT = "behavior_events";
 
 const FLUSH_INTERVAL_MS = 3000;
 const HEARTBEAT_INTERVAL_MS = 30000;
+const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
 const MAX_BATCH_SIZE = 100;
 const MAX_BUFFER_EVENTS = 3000;
 const MAX_RETRIES = 3;
@@ -23,7 +24,6 @@ const activeTabByWindow = new Map();
 let influxConfig = null;
 let flushInProgress = false;
 let lastFlushMs = Date.now();
-let lastSignalMs = Date.now();
 
 const configLoadPromise = loadInfluxConfig();
 
@@ -190,7 +190,6 @@ function toLineProtocol(event) {
 
 function enqueueEvent(event, details = {}) {
   eventBuffer.push(event);
-  lastSignalMs = Date.now();
   logEventToConsole(event, details);
 
   if (eventBuffer.length > MAX_BUFFER_EVENTS) {
@@ -281,11 +280,8 @@ async function flushBuffer() {
   }
 }
 
-function emitFocusHeartbeat() {
+function emitDurationHeartbeat() {
   const now = Date.now();
-  if (now - lastSignalMs < HEARTBEAT_INTERVAL_MS) {
-    return;
-  }
 
   for (const [windowId, state] of activeTabByWindow.entries()) {
     if (!state) {
@@ -293,9 +289,14 @@ function emitFocusHeartbeat() {
     }
 
     const elapsedSec = Math.max((now - state.started_at_ms) / 1000, 0);
+    if (elapsedSec < 1) {
+      continue;
+    }
+    const inactiveMs = now - (state.last_activity_ms || state.started_at_ms);
+    const eventType = inactiveMs >= IDLE_THRESHOLD_MS ? "idle" : "focus";
 
     enqueueEvent(
-      createEvent(state.domain, "focus", {
+      createEvent(state.domain, eventType, {
         duration: elapsedSec
       }),
       {
@@ -323,7 +324,8 @@ async function bootstrapActiveTabs() {
       domain: extractDomain(tab.url),
       url: tab.url || "",
       title: tab.title || "",
-      started_at_ms: now
+      started_at_ms: now,
+      last_activity_ms: now
     });
   }
 }
@@ -355,7 +357,8 @@ async function handleTabActivated(activeInfo) {
     domain,
     url: tab.url || "",
     title: tab.title || "",
-    started_at_ms: now
+    started_at_ms: now,
+    last_activity_ms: now
   });
 
   enqueueEvent(createEvent(domain, "focus", { duration: 0 }), {
@@ -400,6 +403,7 @@ function handleTabUpdated(tabId, changeInfo, tab) {
   current.url = tab.url || changeInfo.url || "";
   current.title = tab.title || "";
   current.started_at_ms = now;
+  current.last_activity_ms = now;
   activeTabByWindow.set(tab.windowId, current);
 
   enqueueEvent(createEvent(newDomain, "focus", { duration: 0 }), {
@@ -467,6 +471,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     if (current && current.tab_id === tabId) {
       const now = Date.now();
       const elapsedSec = Math.max((now - current.started_at_ms) / 1000, 0);
+      current.last_activity_ms = now;
       if (elapsedSec >= 1) {
         enqueueEvent(
           createEvent(current.domain, "focus", { duration: elapsedSec }),
@@ -491,6 +496,10 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   const scrollDelta = Number(message.scroll_delta || 0);
   const scrollDepth = Number(message.scroll_depth || 0);
   if (scrollDelta !== 0 || scrollDepth > 0) {
+    if (current && current.tab_id === tabId) {
+      current.last_activity_ms = Date.now();
+      activeTabByWindow.set(windowId, current);
+    }
     enqueueEvent(
       createEvent(domain, "scroll", {
         scroll_delta: scrollDelta,
@@ -521,5 +530,5 @@ setInterval(() => {
 }, FLUSH_INTERVAL_MS);
 
 setInterval(() => {
-  emitFocusHeartbeat();
+  emitDurationHeartbeat();
 }, HEARTBEAT_INTERVAL_MS);

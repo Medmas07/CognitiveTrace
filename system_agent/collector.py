@@ -13,7 +13,7 @@ from models import Event
 
 
 class BehaviorCollector:
-    """Collects app-level focus/switch/idle events with duration only."""
+    """Collects app-level focus/switch events with duration only."""
 
     def __init__(
         self,
@@ -41,17 +41,34 @@ class BehaviorCollector:
     def request_stop(self) -> None:
         self._running = False
 
-    def run_forever(self) -> None:
+    def run_forever(self, session_minutes: Optional[float] = None) -> None:
         self._running = True
 
         self._current_app, self._current_title = self._get_active_window_info()
         self._last_event_monotonic = time.monotonic()
         self._next_emit_deadline = self._last_event_monotonic + self.emit_interval
+        session_end_monotonic: Optional[float] = None
+        if session_minutes is not None:
+            session_end_monotonic = self._last_event_monotonic + (session_minutes * 60.0)
 
-        logging.info("System collector started")
+        if session_end_monotonic is None:
+            logging.info("System collector started (no session limit)")
+        else:
+            logging.info(
+                "System collector started (session_minutes=%.2f)",
+                session_minutes,
+            )
 
         try:
             while self._running:
+                if (
+                    session_end_monotonic is not None
+                    and time.monotonic() >= session_end_monotonic
+                ):
+                    logging.info("Session duration reached; stopping collector")
+                    self.request_stop()
+                    continue
+
                 self._poll_tick()
                 time.sleep(self.poll_interval)
         finally:
@@ -119,19 +136,15 @@ class BehaviorCollector:
             self.influx_client.enqueue_line(event.to_line_protocol())
             return
 
-        # Focus/idle intervals from the same app are merged before write.
+        # Focus intervals from the same app are merged before write.
         # Writing each tiny slice separately would fragment sessions.
         if (
             self._pending_event
             and self._pending_event.app_name == event.app_name
-            and self._pending_event.event_type in {"focus", "idle"}
+            and self._pending_event.event_type == "focus"
         ):
             self._pending_event.duration += event.duration
             self._pending_event.timestamp = event.timestamp
-            self._pending_event.event_type = classify_event_type(
-                self._pending_event.duration,
-                app_changed=False,
-            )
         else:
             self._flush_pending_event(force=True)
             self._pending_event = event

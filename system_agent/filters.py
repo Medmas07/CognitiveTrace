@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 MIN_DURATION_SECONDS = 1.0
-IDLE_THRESHOLD_SECONDS = 5.0
 
 
 def should_drop_event(duration_seconds: float) -> bool:
@@ -10,9 +9,7 @@ def should_drop_event(duration_seconds: float) -> bool:
 
 
 def classify_event_type(duration_seconds: float, app_changed: bool) -> str:
+    _ = duration_seconds
     if app_changed:
         return "switch"
-    if duration_seconds > IDLE_THRESHOLD_SECONDS:
-        return "idle"
     return "focus"
-

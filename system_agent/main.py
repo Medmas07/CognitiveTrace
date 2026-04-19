@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import signal
@@ -26,7 +27,22 @@ def configure_logging() -> None:
     )
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="System behavior collector")
+    parser.add_argument(
+        "--session-minutes",
+        type=float,
+        default=None,
+        help="Optional session duration in minutes (example: 30, 45).",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
+    args = parse_args()
+    if args.session_minutes is not None and args.session_minutes <= 0:
+        raise RuntimeError("--session-minutes must be > 0")
+
     configure_logging()
 
     project_root = Path(__file__).resolve().parents[1]
@@ -65,7 +81,7 @@ def main() -> int:
 
     influx_client.start()
     try:
-        collector.run_forever()
+        collector.run_forever(session_minutes=args.session_minutes)
     finally:
         influx_client.stop()
 
