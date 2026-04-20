@@ -11,11 +11,32 @@
 import { INFLUX_CONFIG } from '../shared/constants.js';
 import { escapeFieldString, escapeTag, msToNs } from '../shared/utils.js';
 
-const WRITE_URL =
-  `${INFLUX_CONFIG.URL}/api/v2/write` +
-  `?org=${encodeURIComponent(INFLUX_CONFIG.ORG)}` +
-  `&bucket=${encodeURIComponent(INFLUX_CONFIG.BUCKET)}` +
-  `&precision=ns`;
+// ─────────────────────────────────────────────────────────────────────────────
+// Runtime config — merged from constants.js defaults + chrome.storage.local.
+// Credentials (TOKEN especially) must come from storage, never hardcoded.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const STORAGE_CONFIG_KEY = 'influx_config';
+
+/** Returns the effective InfluxDB config, preferring stored values. */
+async function loadConfig() {
+  try {
+    const { [STORAGE_CONFIG_KEY]: stored } =
+      await chrome.storage.local.get(STORAGE_CONFIG_KEY);
+    return { ...INFLUX_CONFIG, ...(stored ?? {}) };
+  } catch {
+    return { ...INFLUX_CONFIG };
+  }
+}
+
+function buildWriteURL(cfg) {
+  return (
+    `${cfg.URL}/api/v2/write` +
+    `?org=${encodeURIComponent(cfg.ORG)}` +
+    `&bucket=${encodeURIComponent(cfg.BUCKET)}` +
+    `&precision=ns`
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Line protocol builders — one per measurement
@@ -155,11 +176,19 @@ export class InfluxWriter {
     const batch = this._queue.splice(0);
     const body  = batch.join('\n');
 
+    const cfg = await loadConfig();
+
+    if (!cfg.TOKEN) {
+      console.error('[InfluxWriter] No token configured. Open the extension popup → Settings to add your InfluxDB token.');
+      this._queue.unshift(...batch); // preserve data until token is set
+      return;
+    }
+
     try {
-      const res = await fetch(WRITE_URL, {
+      const res = await fetch(buildWriteURL(cfg), {
         method:  'POST',
         headers: {
-          Authorization:  `Token ${INFLUX_CONFIG.TOKEN}`,
+          Authorization:  `Token ${cfg.TOKEN}`,
           'Content-Type': 'text/plain; charset=utf-8',
         },
         body,

@@ -50,6 +50,38 @@
 
   <div id="error-msg"></div>
 
+  <!-- ── InfluxDB Settings ──────────────────────────────────────────────── -->
+  <div id="settings-toggle">
+    <button class="btn-link" id="btn-toggle-settings">⚙ InfluxDB settings</button>
+  </div>
+
+  <div id="settings-panel" style="display:none;">
+    <div class="settings-header">InfluxDB Connection</div>
+
+    <div class="form-group">
+      <label for="cfg-url">URL</label>
+      <input type="text" id="cfg-url" placeholder="http://localhost:8086">
+    </div>
+    <div class="form-group">
+      <label for="cfg-token">
+        Token
+        <span id="token-status" class="token-badge"></span>
+      </label>
+      <input type="password" id="cfg-token" placeholder="your-influxdb-token" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label for="cfg-org">Organisation</label>
+      <input type="text" id="cfg-org" placeholder="research">
+    </div>
+    <div class="form-group">
+      <label for="cfg-bucket">Bucket</label>
+      <input type="text" id="cfg-bucket" placeholder="behavior">
+    </div>
+
+    <button class="btn btn-save" id="btn-save-cfg">Save</button>
+    <div id="cfg-saved-msg" style="display:none;">✓ Saved</div>
+  </div>
+
   <script type="module" src="popup.js"></script>
 </body>
 </html>
