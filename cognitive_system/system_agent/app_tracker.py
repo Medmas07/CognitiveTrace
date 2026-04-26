@@ -25,6 +25,28 @@ LOGGER = logging.getLogger(__name__)
 _MIN_CHANGE_INTERVAL_SEC: float = 1.0
 
 
+def _parse_app_context(process_name: str, window_title: str) -> str:
+    """Return the most useful context string for an active-app event.
+
+    VSCode  – title format "● filename.ext - folder - Visual Studio Code"
+              → returns the filename (strips unsaved marker, folder, app suffix).
+    Others  – returns the full window title unchanged.
+    """
+    title = (window_title or "").strip()
+    if not title:
+        return ""
+    proc = process_name.lower()
+    # code.exe is VSCode; guard also covers titles that explicitly say "Visual Studio Code"
+    if proc == "code.exe" or ("code" in proc and "visual studio code" in title.lower()):
+        parts = [p.strip() for p in title.split(" - ")]
+        # First segment is the open file; strip the unsaved-file marker (●)
+        first = parts[0].lstrip("●").strip()
+        if first and first.lower() not in {"visual studio code"}:
+            return first
+        return ""
+    return title
+
+
 @dataclass(frozen=True)
 class AppSnapshot:
     timestamp_ns: int
@@ -36,6 +58,11 @@ class AppSnapshot:
     @property
     def app_name(self) -> str:
         return self.process_name or "unknown"
+
+    @property
+    def context(self) -> str:
+        """Parsed, human-useful context extracted from the window title."""
+        return _parse_app_context(self.process_name, self.window_title)
 
 
 class AppTracker:

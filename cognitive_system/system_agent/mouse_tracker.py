@@ -58,11 +58,16 @@ class MouseTracker:
             return
         now = time.time()
         with self._lock:
+            delta_x = 0
+            delta_y = 0
             speed = 0.0
             if self._last_pos and self._last_move_time:
+                delta_x = x - self._last_pos[0]
+                delta_y = y - self._last_pos[1]
                 elapsed = now - self._last_move_time
                 if elapsed > 0:
-                    distance = math.hypot(x - self._last_pos[0], y - self._last_pos[1])
+                    # Reuse already-computed deltas to avoid redundant subtraction
+                    distance = math.hypot(delta_x, delta_y)
                     speed = round(distance / elapsed, 2)
             self._last_pos = (x, y)
             self._last_move_time = now
@@ -73,6 +78,8 @@ class MouseTracker:
                 "event_type": "mouse_move",
                 "x": x,
                 "y": y,
+                "delta_x": delta_x,
+                "delta_y": delta_y,
                 "speed": speed,
             }
         )

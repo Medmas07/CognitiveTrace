@@ -184,7 +184,7 @@ class CognitiveSystemAgent:
 
         command = self.session_manager.set_browser_foreground(snapshot.is_browser)
 
-        # ── Parts 2, 3, 7: full payload — app_name + device_id always present ─
+        # ── Parts 1, 2: full payload with window_title + parsed context in extra ─
         session_id = self.session_manager.session_id
         if session_id:
             event = {
@@ -193,10 +193,9 @@ class CognitiveSystemAgent:
                 "device_id": self.config.device_id,
                 "event_type": "active_app_change",
                 "app_name": snapshot.app_name,
-                "extra": (
-                    f"process={snapshot.process_name};window={snapshot.window_title};"
-                    f"is_browser={snapshot.is_browser}"
-                ),
+                "window_title": snapshot.window_title,
+                # context: open filename for VSCode, full title for everything else
+                "extra": snapshot.context,
             }
             if _validate_behavior_event(event):
                 self.data_writer.write_behavior_event(event)
@@ -329,18 +328,19 @@ class CognitiveSystemAgent:
             if not snapshot.session_id:
                 continue
             current_snap = self._latest_app_snapshot
-            event = {
+            # ── Part 4: dual_task goes to dual_task.csv, never behavior.csv ──
+            dt_event = {
                 "timestamp": time.time(),
                 "session_id": snapshot.session_id,
                 "device_id": self.config.device_id,
-                "event_type": "dual_task",
-                "app_name": current_snap.app_name if current_snap else "unknown",
                 "reaction_time_ms": result.reaction_time_ms,
-                "miss": result.miss,
+                "success": result.success,
                 "error": result.error,
+                "app_name": current_snap.app_name if current_snap else "unknown",
             }
-            if _validate_behavior_event(event):
-                self.data_writer.write_behavior_event(event)
+            # Part 5: minimal validation — drop events without identity fields
+            if dt_event.get("session_id") and dt_event.get("timestamp"):
+                self.data_writer.write_dual_task_event(dt_event)
 
     # ------------------------------------------------------------------
     # Utility helpers

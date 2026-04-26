@@ -42,7 +42,8 @@ class DataWriter:
             "session_id",
             "device_id",
             "event_type",
-            "app_name",          # system app active when event was recorded
+            "app_name",
+            "window_title",      # OS-level window title (active_app_change events)
             "url",
             "title",
             "tab_id",
@@ -52,7 +53,16 @@ class DataWriter:
             "reaction_time_ms",
             "miss",
             "error",
-            "extra",
+            "extra",             # parsed context (e.g. open filename in VSCode)
+        ],
+        "dual_task": [
+            "timestamp",
+            "session_id",
+            "device_id",
+            "reaction_time_ms",
+            "success",
+            "error",
+            "app_name",
         ],
         "keyboard": [
             "timestamp",
@@ -95,6 +105,7 @@ class DataWriter:
         "keyboard": "influxdb_keyboard_bucket",
         "mouse": "influxdb_mouse_bucket",
         "labels": "influxdb_behavior_bucket",
+        "dual_task": "influxdb_behavior_bucket",
     }
 
     _STREAM_TO_MEASUREMENT = {
@@ -102,6 +113,7 @@ class DataWriter:
         "keyboard": "keyboard_event",
         "mouse": "mouse_event",
         "labels": "label_event",
+        "dual_task": "dual_task_event",
     }
 
     def __init__(self, config: RuntimeConfig):
@@ -195,6 +207,11 @@ class DataWriter:
         normalized = self._normalize_event(labels)
         self._write_stream("labels", normalized)
 
+    def write_dual_task_event(self, event: Dict[str, Any]) -> None:
+        """Write a dual-task probe result to dual_task.csv (never to behavior.csv)."""
+        normalized = self._normalize_event(event)
+        self._write_stream("dual_task", normalized)
+
     def _normalize_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         payload = dict(event)
         payload["timestamp"] = _as_epoch_seconds(payload.get("timestamp"))
@@ -223,6 +240,12 @@ class DataWriter:
             handle.flush()
 
     def _build_behavior_extra(self, event: Dict[str, Any]) -> str:
+        # If the caller already set a non-empty `extra` (e.g. parsed VSCode filename),
+        # preserve it instead of overwriting with an auto-computed JSON string.
+        existing = event.get("extra")
+        if existing is not None and str(existing).strip():
+            return str(existing)
+        # Fall back: serialize any unknown fields into a JSON blob.
         known = set(self._CSV_SCHEMAS["behavior"])
         extras = {
             key: value

@@ -1,2 +1,0 @@
-"""System behavior collection package."""
-
