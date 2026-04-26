@@ -27,10 +27,23 @@ from system_agent.app_tracker import AppSnapshot, AppTracker
 from system_agent.config import RuntimeConfig, build_runtime_config
 from system_agent.data_writer import DataWriter
 from system_agent.dependency_validation import validate_runtime_dependencies
+from system_agent.dual_task_manager import DualTaskManager
 from system_agent.extension_server import ExtensionServer
 from system_agent.keyboard_tracker import KeyboardTracker
 from system_agent.mouse_tracker import MouseTracker
 from system_agent.session_manager import SessionManager
+
+
+# ── Part 8: validation — drop events that are missing required fields ─────────
+_REQUIRED_BEHAVIOR_FIELDS = ("timestamp", "session_id", "event_type")
+
+
+def _validate_behavior_event(event: dict) -> bool:
+    for field in _REQUIRED_BEHAVIOR_FIELDS:
+        if not event.get(field):
+            LOGGER.warning("Dropping malformed event (missing '%s'): %s", field, event)
+            return False
+    return True
 
 
 class CognitiveSystemAgent:
@@ -66,6 +79,8 @@ class CognitiveSystemAgent:
             on_change=self._on_active_app_change,
         )
 
+        self._dual_task_mgr = DualTaskManager()
+
         self._browser_foreground = False
         self._latest_app_snapshot: Optional[AppSnapshot] = None
 
@@ -87,13 +102,23 @@ class CognitiveSystemAgent:
         if not current_session:
             return
 
+        # ── Part 3: enrich every browser event with the current system app ──
+        current_snap = self._latest_app_snapshot
+        app_name = current_snap.app_name if current_snap else "unknown"
+
         for raw in events:
             if not isinstance(raw, dict):
                 continue
             event = dict(raw)
+            # ── Part 7: use system time if browser did not supply one ────────
             event.setdefault("timestamp", time.time())
             event.setdefault("session_id", current_session)
+            event.setdefault("device_id", self.config.device_id)
+            event.setdefault("app_name", app_name)
             if event.get("session_id") != current_session:
+                continue
+            # ── Part 8: drop malformed events ────────────────────────────────
+            if not _validate_behavior_event(event):
                 continue
             self.data_writer.write_behavior_event(event)
 
@@ -158,17 +183,23 @@ class CognitiveSystemAgent:
             return
 
         command = self.session_manager.set_browser_foreground(snapshot.is_browser)
-        self.data_writer.write_behavior_event(
-            {
+
+        # ── Parts 2, 3, 7: full payload — app_name + device_id always present ─
+        session_id = self.session_manager.session_id
+        if session_id:
+            event = {
                 "timestamp": time.time(),
-                "session_id": self.session_manager.session_id,
+                "session_id": session_id,
+                "device_id": self.config.device_id,
                 "event_type": "active_app_change",
+                "app_name": snapshot.app_name,
                 "extra": (
                     f"process={snapshot.process_name};window={snapshot.window_title};"
                     f"is_browser={snapshot.is_browser}"
                 ),
             }
-        )
+            if _validate_behavior_event(event):
+                self.data_writer.write_behavior_event(event)
 
         if command:
             await self._send_recording_command(command)
@@ -263,6 +294,11 @@ class CognitiveSystemAgent:
     async def _status_broadcast_loop(self) -> None:
         while self.session_manager.active:
             await self._broadcast_status()
+            # ── Part 6: overwrite the same terminal line every second ─────────
+            remaining = self.session_manager.get_remaining()
+            mins = int(remaining) // 60
+            secs = int(remaining) % 60
+            print(f"\rTime left: {mins:02d}:{secs:02d}  ", end="", flush=True)
             await asyncio.sleep(self.config.session_broadcast_interval)
 
     async def _session_watchdog_loop(self) -> None:
@@ -284,15 +320,27 @@ class CognitiveSystemAgent:
             if snapshot.state != "running":
                 continue
 
+            # ── Part 4: show probe in OS window (tkinter), not in the browser ─
             probe_id = f"probe_{uuid.uuid4().hex[:8]}"
-            await self.extension_server.broadcast(
-                {
-                    "type": "dual_task_probe",
-                    "session_id": snapshot.session_id,
-                    "probe_id": probe_id,
-                    "timeout_ms": timeout_ms,
-                }
+            result = await self.loop.run_in_executor(
+                None,
+                lambda: self._dual_task_mgr.run_probe(probe_id, timeout_ms),
             )
+            if not snapshot.session_id:
+                continue
+            current_snap = self._latest_app_snapshot
+            event = {
+                "timestamp": time.time(),
+                "session_id": snapshot.session_id,
+                "device_id": self.config.device_id,
+                "event_type": "dual_task",
+                "app_name": current_snap.app_name if current_snap else "unknown",
+                "reaction_time_ms": result.reaction_time_ms,
+                "miss": result.miss,
+                "error": result.error,
+            }
+            if _validate_behavior_event(event):
+                self.data_writer.write_behavior_event(event)
 
     # ------------------------------------------------------------------
     # Utility helpers
@@ -341,6 +389,38 @@ class CognitiveSystemAgent:
             self._awaiting_questionnaire = False
             self._pending_questionnaire_session_id = None
 
+    # ── Part 5: global hotkey to trigger questionnaire mid-session ────────────
+
+    def _setup_questionnaire_hotkey(self) -> None:
+        try:
+            import keyboard as kb  # optional dependency
+
+            def _trigger() -> None:
+                if not self.session_manager.active or self._awaiting_questionnaire:
+                    return
+                if self.loop:
+                    self.loop.call_soon_threadsafe(
+                        lambda: asyncio.create_task(self._open_questionnaire_now())
+                    )
+
+            kb.add_hotkey("ctrl+shift+q", _trigger)
+            LOGGER.info("Questionnaire hotkey registered: Ctrl+Shift+Q")
+        except Exception as exc:
+            LOGGER.warning("Could not register questionnaire hotkey (keyboard lib?): %s", exc)
+
+    async def _open_questionnaire_now(self) -> None:
+        if not self.session_manager.active or self._awaiting_questionnaire:
+            return
+        session_id = self.session_manager.session_id
+        if not session_id:
+            return
+        self._awaiting_questionnaire = True
+        self._pending_questionnaire_session_id = session_id
+        await self.extension_server.broadcast(
+            {"type": "open_questionnaire", "session_id": session_id}
+        )
+        print("\n[QUESTIONNAIRE] Triggered via hotkey. Waiting for submission in browser...")
+
     def _print_banner(self) -> None:
         print(
             "\n"
@@ -364,6 +444,7 @@ class CognitiveSystemAgent:
             await self.extension_server.start()
             self.app_tracker.start()
             self._print_banner()
+            self._setup_questionnaire_hotkey()  # Part 5: Ctrl+Shift+Q
 
             start = await self._wait_for_user_start()
             if not start:

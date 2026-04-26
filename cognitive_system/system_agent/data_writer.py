@@ -42,6 +42,7 @@ class DataWriter:
             "session_id",
             "device_id",
             "event_type",
+            "app_name",          # system app active when event was recorded
             "url",
             "title",
             "tab_id",

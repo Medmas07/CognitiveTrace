@@ -88,3 +88,24 @@
 2026-04-26 16:08:50,674 [INFO] websockets.server: server closed
 2026-04-26 16:08:50,674 [INFO] system_agent.extension_server: Extension server stopped
 2026-04-26 16:08:50,674 [INFO] __main__: System agent shut down cleanly
+2026-04-26 16:29:13,414 [INFO] websockets.server: server listening on 127.0.0.1:5000
+2026-04-26 16:29:13,414 [INFO] websockets.server: server listening on [::1]:5000
+2026-04-26 16:29:13,414 [INFO] system_agent.extension_server: WebSocket listening on ws://localhost:5000
+2026-04-26 16:29:13,414 [INFO] system_agent.extension_server: HTTP listening on http://localhost:5001
+2026-04-26 16:29:13,414 [WARNING] __main__: Could not register questionnaire hotkey (keyboard lib?): No module named 'keyboard'
+2026-04-26 16:29:14,621 [INFO] websockets.server: connection open
+2026-04-26 16:29:14,621 [INFO] system_agent.extension_server: Extension connected (1 clients)
+2026-04-26 16:35:07,067 [INFO] system_agent.data_writer: Session outputs initialized at C:\Users\medte\OneDrive\Desktop\Behavior User Collecting\cognitive_system\data\session_20260426_163507_d68aa0
+2026-04-26 16:35:07,110 [INFO] system_agent.keyboard_tracker: Keyboard tracker started
+2026-04-26 16:35:07,111 [INFO] system_agent.mouse_tracker: Mouse tracker started
+2026-04-26 16:40:07,148 [INFO] __main__: Stopping session session_20260426_163507_d68aa0 reason=duration_expired
+2026-04-26 16:40:07,162 [INFO] system_agent.keyboard_tracker: Keyboard tracker stopped
+2026-04-26 16:40:07,163 [INFO] system_agent.mouse_tracker: Mouse tracker stopped
+2026-04-26 16:40:48,519 [INFO] __main__: Questionnaire received and persisted
+2026-04-26 16:40:48,710 [INFO] system_agent.keyboard_tracker: Keyboard tracker stopped
+2026-04-26 16:40:48,712 [INFO] system_agent.mouse_tracker: Mouse tracker stopped
+2026-04-26 16:40:48,713 [INFO] websockets.server: server closing
+2026-04-26 16:40:48,733 [INFO] system_agent.extension_server: Extension disconnected (0 clients)
+2026-04-26 16:40:48,738 [INFO] websockets.server: server closed
+2026-04-26 16:40:48,741 [INFO] system_agent.extension_server: Extension server stopped
+2026-04-26 16:40:48,751 [INFO] __main__: System agent shut down cleanly

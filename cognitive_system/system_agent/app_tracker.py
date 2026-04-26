@@ -20,6 +20,10 @@ from shared.time_utils import now_ns
 
 LOGGER = logging.getLogger(__name__)
 
+# Minimum seconds between consecutive active_app_change emissions.
+# Prevents high-frequency spam when window titles change rapidly (e.g. browser tabs).
+_MIN_CHANGE_INTERVAL_SEC: float = 1.0
+
 
 @dataclass(frozen=True)
 class AppSnapshot:
@@ -86,11 +90,17 @@ class AppTracker:
         previous = self._last_snapshot
         if previous is None:
             return True
-        return (previous.process_name, previous.window_title, previous.pid) != (
-            snapshot.process_name,
-            snapshot.window_title,
-            snapshot.pid,
-        )
+        # Emit only when the active *process* (app) changes.
+        # Ignoring window_title prevents high-frequency spam from browser tab
+        # title updates (e.g. YouTube progress, live dashboards).
+        if previous.process_name == snapshot.process_name:
+            return False
+        # Debounce: drop events that arrive faster than the minimum interval
+        # even if the process name did change (rapid alt-tab sequences).
+        elapsed_sec = (snapshot.timestamp_ns - previous.timestamp_ns) / 1_000_000_000
+        if elapsed_sec < _MIN_CHANGE_INTERVAL_SEC:
+            return False
+        return True
 
     def _capture_snapshot(self) -> AppSnapshot:
         if self._is_windows:
