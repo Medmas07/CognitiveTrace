@@ -1,24 +1,40 @@
 from __future__ import annotations
 
+import json
 import logging
 import math
 import threading
 import time
-from typing import Callable, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 LOGGER = logging.getLogger(__name__)
 
 
 class MouseTracker:
-    def __init__(self, on_event: Callable[[dict], None], enabled: bool = True):
+    def __init__(
+        self,
+        on_event: Callable[[dict], None],
+        enabled: bool = True,
+        context_provider: Optional[Callable[[], Dict[str, object]]] = None,
+    ):
         self._on_event = on_event
         self._enabled = enabled
+        self._context_provider = context_provider
         self._listener = None
         self._active = False
 
         self._lock = threading.Lock()
         self._last_pos: Optional[Tuple[int, int]] = None
         self._last_move_time: Optional[float] = None
+
+    def _get_context_str(self) -> str:
+        """Return the current context as a JSON string, or an empty JSON object."""
+        if self._context_provider is None:
+            return "{}"
+        try:
+            return json.dumps(self._context_provider(), ensure_ascii=True)
+        except Exception:
+            return "{}"
 
     @property
     def enabled(self) -> bool:
@@ -81,6 +97,7 @@ class MouseTracker:
                 "delta_x": delta_x,
                 "delta_y": delta_y,
                 "speed": speed,
+                "context": self._get_context_str(),
             }
         )
 
@@ -95,6 +112,7 @@ class MouseTracker:
                 "y": y,
                 "button": str(button).replace("Button.", ""),
                 "speed": 0.0,
+                "context": self._get_context_str(),
             }
         )
 
@@ -110,6 +128,7 @@ class MouseTracker:
                 "delta_x": dx,
                 "delta_y": dy,
                 "speed": 0.0,
+                "context": self._get_context_str(),
             }
         )
 

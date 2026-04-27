@@ -1,0 +1,21 @@
+2026-04-27 10:47:24,691 [INFO] websockets.server: server listening on 127.0.0.1:5000
+2026-04-27 10:47:24,691 [INFO] websockets.server: server listening on [::1]:5000
+2026-04-27 10:47:24,691 [INFO] system_agent.extension_server: WebSocket listening on ws://localhost:5000
+2026-04-27 10:47:24,691 [INFO] system_agent.extension_server: HTTP listening on http://localhost:5001
+2026-04-27 10:47:24,748 [INFO] __main__: Questionnaire hotkey registered: Ctrl+Shift+Q (pynput)
+2026-04-27 10:47:27,589 [INFO] websockets.server: connection open
+2026-04-27 10:47:27,589 [INFO] system_agent.extension_server: Extension connected (1 clients)
+2026-04-27 10:47:29,569 [INFO] system_agent.data_writer: Session outputs initialized at C:\Users\medte\OneDrive\Desktop\Behavior User Collecting\cognitive_system\data\session_20260427_104729_941421
+2026-04-27 10:47:29,573 [INFO] system_agent.keyboard_tracker: Keyboard tracker started
+2026-04-27 10:47:29,573 [INFO] system_agent.mouse_tracker: Mouse tracker started
+2026-04-27 10:50:29,727 [INFO] __main__: Stopping session session_20260427_104729_941421 reason=duration_expired
+2026-04-27 10:50:29,730 [INFO] system_agent.keyboard_tracker: Keyboard tracker stopped
+2026-04-27 10:50:29,732 [INFO] system_agent.mouse_tracker: Mouse tracker stopped
+2026-04-27 10:52:11,266 [INFO] __main__: Questionnaire received and persisted
+2026-04-27 10:52:11,768 [INFO] system_agent.keyboard_tracker: Keyboard tracker stopped
+2026-04-27 10:52:11,769 [INFO] system_agent.mouse_tracker: Mouse tracker stopped
+2026-04-27 10:52:11,769 [INFO] websockets.server: server closing
+2026-04-27 10:52:11,775 [INFO] system_agent.extension_server: Extension disconnected (0 clients)
+2026-04-27 10:52:11,778 [INFO] websockets.server: server closed
+2026-04-27 10:52:11,782 [INFO] system_agent.extension_server: Extension server stopped
+2026-04-27 10:52:11,782 [INFO] __main__: System agent shut down cleanly

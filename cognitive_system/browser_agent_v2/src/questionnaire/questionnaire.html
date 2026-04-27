@@ -15,50 +15,95 @@
 
     <form id="questionnaire-form">
       <h2>NASA-TLX (Raw)</h2>
+
       <div class="field">
-        <label for="mental_demand">Mental Demand (0-100)</label>
+        <label for="mental_demand">
+          Mental Demand (0–100)
+          <span class="help-icon" tabindex="0"
+            data-tooltip="What level of mental effort was required? (thinking, concentration, understanding tasks)">&#9432;</span>
+        </label>
         <input id="mental_demand" name="mental_demand" type="range" min="0" max="100" value="50" />
         <output id="out_mental_demand">50</output>
       </div>
+
       <div class="field">
-        <label for="physical_demand">Physical Demand (0-100)</label>
+        <label for="physical_demand">
+          Physical Demand (0–100)
+          <span class="help-icon" tabindex="0"
+            data-tooltip="How physically demanding was the interaction? (mouse movement, keyboard effort)">&#9432;</span>
+        </label>
         <input id="physical_demand" name="physical_demand" type="range" min="0" max="100" value="50" />
         <output id="out_physical_demand">50</output>
       </div>
+
       <div class="field">
-        <label for="temporal_demand">Temporal Demand (0-100)</label>
+        <label for="temporal_demand">
+          Temporal Demand (0–100)
+          <span class="help-icon" tabindex="0"
+            data-tooltip="How time-pressured or rushed did you feel during the session?">&#9432;</span>
+        </label>
         <input id="temporal_demand" name="temporal_demand" type="range" min="0" max="100" value="50" />
         <output id="out_temporal_demand">50</output>
       </div>
+
       <div class="field">
-        <label for="performance">Performance (0-100)</label>
+        <label for="performance">
+          Performance (0–100)
+          <span class="help-icon" tabindex="0"
+            data-tooltip="How successful do you think you were in completing your tasks? (0 = failure, 100 = perfect)">&#9432;</span>
+        </label>
         <input id="performance" name="performance" type="range" min="0" max="100" value="50" />
         <output id="out_performance">50</output>
       </div>
+
       <div class="field">
-        <label for="effort">Effort (0-100)</label>
+        <label for="effort">
+          Effort (0–100)
+          <span class="help-icon" tabindex="0"
+            data-tooltip="How hard did you have to work (mentally and physically combined) to achieve your level of performance?">&#9432;</span>
+        </label>
         <input id="effort" name="effort" type="range" min="0" max="100" value="50" />
         <output id="out_effort">50</output>
       </div>
+
       <div class="field">
-        <label for="frustration">Frustration (0-100)</label>
+        <label for="frustration">
+          Frustration (0–100)
+          <span class="help-icon" tabindex="0"
+            data-tooltip="How stressed, irritated, or annoyed did you feel? (0 = calm, 100 = very frustrated)">&#9432;</span>
+        </label>
         <input id="frustration" name="frustration" type="range" min="0" max="100" value="50" />
         <output id="out_frustration">50</output>
       </div>
 
       <h2>Affective Ratings</h2>
+
       <div class="field">
-        <label for="stress_self_report">Stress Self-Report (0-100)</label>
+        <label for="stress_self_report">
+          Stress Self-Report (0–100)
+          <span class="help-icon" tabindex="0"
+            data-tooltip="Overall perceived stress during the session. (0 = completely calm, 100 = very stressed)">&#9432;</span>
+        </label>
         <input id="stress_self_report" name="stress_self_report" type="range" min="0" max="100" value="50" />
         <output id="out_stress_self_report">50</output>
       </div>
+
       <div class="field">
-        <label for="valence">Valence (1-9)</label>
+        <label for="valence">
+          Valence (1–9)
+          <span class="help-icon" tabindex="0"
+            data-tooltip="How positive or negative was your emotional state? (1 = very negative/unpleasant, 5 = neutral, 9 = very positive/pleasant)">&#9432;</span>
+        </label>
         <input id="valence" name="valence" type="range" min="1" max="9" value="5" />
         <output id="out_valence">5</output>
       </div>
+
       <div class="field">
-        <label for="arousal">Arousal (1-9)</label>
+        <label for="arousal">
+          Arousal (1–9)
+          <span class="help-icon" tabindex="0"
+            data-tooltip="How calm or excited did you feel? (1 = very calm/relaxed, 5 = moderate, 9 = highly excited/stimulated)">&#9432;</span>
+        </label>
         <input id="arousal" name="arousal" type="range" min="1" max="9" value="5" />
         <output id="out_arousal">5</output>
       </div>
@@ -75,4 +120,3 @@
   <script src="questionnaire.js" type="module"></script>
 </body>
 </html>
-

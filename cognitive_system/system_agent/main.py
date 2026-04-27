@@ -73,23 +73,27 @@ class CognitiveSystemAgent:
             on_heartbeat=self._handle_heartbeat,
         )
 
+        # ContextTracker must be created before the input trackers so that
+        # context_provider (a bound method) is valid when passed below.
+        self._context_tracker = ContextTracker(on_finalized=self._on_context_finalized)
+        self._dual_task_mgr = DualTaskManager()
+        self._hotkey_listener = None  # pynput GlobalHotKeys instance
+
         self.keyboard_tracker = KeyboardTracker(
             on_event=self._handle_keyboard_event,
             enabled=config.keyboard_tracking_enabled,
+            context_provider=self._context_tracker.get_current_context,
         )
         self.mouse_tracker = MouseTracker(
             on_event=self._handle_mouse_event,
             enabled=config.mouse_tracking_enabled,
+            context_provider=self._context_tracker.get_current_context,
         )
         self.app_tracker = AppTracker(
             poll_interval_sec=config.app_poll_interval_seconds,
             browser_processes=set(config.browser_processes),
             on_change=self._on_active_app_change,
         )
-
-        self._dual_task_mgr = DualTaskManager()
-        self._context_tracker = ContextTracker(on_finalized=self._on_context_finalized)
-        self._hotkey_listener = None  # pynput GlobalHotKeys instance
 
         self._browser_foreground = False
         self._latest_app_snapshot: Optional[AppSnapshot] = None

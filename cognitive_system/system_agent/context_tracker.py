@@ -6,9 +6,21 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional
+from urllib.parse import urlparse
 
 LOGGER = logging.getLogger(__name__)
+
+# Returned by get_current_context() when no frame is open yet.
+_EMPTY_CONTEXT: Dict[str, object] = {
+    "active_app": None,
+    "window_title": None,
+    "url": None,
+    "domain": None,
+    "path": None,
+    "tab_id": None,
+    "task_state": None,
+}
 
 
 @dataclass
@@ -66,6 +78,37 @@ class ContextTracker:
             self._frame = new_frame
         if finalized:
             self._emit(finalized)
+
+    def get_current_context(self) -> Dict[str, object]:
+        """Return a context snapshot for enriching mouse/keyboard events.
+
+        Always returns all seven keys; missing values are None (never omitted).
+        domain and path are parsed from url so callers do not need urllib.
+        task_state is reserved for future heuristic labeling.
+        """
+        with self._lock:
+            frame = self._frame
+        if frame is None:
+            return dict(_EMPTY_CONTEXT)
+
+        url = frame.url or ""
+        try:
+            parsed = urlparse(url)
+            domain: Optional[str] = parsed.netloc or None
+            path: Optional[str] = parsed.path or None
+        except Exception:
+            domain = None
+            path = None
+
+        return {
+            "active_app": frame.app_name or None,
+            "window_title": frame.window_title or None,
+            "url": url or None,
+            "domain": domain,
+            "path": path,
+            "tab_id": frame.tab_id or None,
+            "task_state": None,   # reserved for future heuristic labeling
+        }
 
     def force_close(self, end_time: Optional[float] = None) -> None:
         """Force-close any open context (session end, crash, shutdown).

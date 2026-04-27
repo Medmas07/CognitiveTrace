@@ -73,6 +73,7 @@ class DataWriter:
             "event_type",
             "key",
             "interval_ms",
+            "context",   # JSON: {active_app, window_title, url, domain, path, tab_id, task_state}
         ],
         "mouse": [
             "timestamp",
@@ -85,6 +86,7 @@ class DataWriter:
             "delta_x",
             "delta_y",
             "speed",
+            "context",   # JSON: {active_app, window_title, url, domain, path, tab_id, task_state}
         ],
         "labels": [
             "timestamp",

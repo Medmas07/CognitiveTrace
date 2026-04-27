@@ -1,21 +1,37 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional
 
 LOGGER = logging.getLogger(__name__)
 
 
 class KeyboardTracker:
-    def __init__(self, on_event: Callable[[dict], None], enabled: bool = True):
+    def __init__(
+        self,
+        on_event: Callable[[dict], None],
+        enabled: bool = True,
+        context_provider: Optional[Callable[[], Dict[str, object]]] = None,
+    ):
         self._on_event = on_event
         self._enabled = enabled
+        self._context_provider = context_provider
         self._listener = None
         self._active = False
         self._last_press_time: Optional[float] = None
         self._lock = threading.Lock()
+
+    def _get_context_str(self) -> str:
+        """Return the current context as a JSON string, or an empty JSON object."""
+        if self._context_provider is None:
+            return "{}"
+        try:
+            return json.dumps(self._context_provider(), ensure_ascii=True)
+        except Exception:
+            return "{}"
 
     @property
     def enabled(self) -> bool:
@@ -71,6 +87,7 @@ class KeyboardTracker:
                 "event_type": "key_press",
                 "key": self._key_name(key),
                 "interval_ms": round(interval_ms, 2),
+                "context": self._get_context_str(),
             }
         )
 
@@ -83,6 +100,7 @@ class KeyboardTracker:
                 "event_type": "key_release",
                 "key": self._key_name(key),
                 "interval_ms": 0.0,
+                "context": self._get_context_str(),
             }
         )
 
