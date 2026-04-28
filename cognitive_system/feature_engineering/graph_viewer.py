@@ -28,7 +28,9 @@ from urllib.parse import urlparse
 
 import pandas as pd
 
+from .features import MODALITY_FEATURE_COLUMNS
 from .graph_builder import GraphBuilder
+from .node_features import NODE_FEATURE_COLUMNS
 from .windowing import DEFAULT_WINDOW_CONFIGS, WindowConfig, WindowEngine
 
 LOGGER = logging.getLogger(__name__)
@@ -45,6 +47,7 @@ _MUTED = "#607188"
 _PANEL_BG = "#eef4fb"
 _CANVAS_BG = "#f1f6fc"
 _EMPTY_BG = "#edf3fb"
+_WINDOW_META_COLUMNS = ["window_id", "session_id", "window_start", "window_end"]
 _DISTRACTOR_DOMAINS = {
     "youtube.com",
     "www.youtube.com",
@@ -64,6 +67,8 @@ class GraphNodeView:
     key: str
     label: str
     node_kind: str
+    feature_node_type: str
+    feature_node_id: str
     features: dict[str, object]
 
 
@@ -146,7 +151,7 @@ def load_session_bundle(
         cleaned_events = cleaner.clean_events(behavior_df)
         cleaned_events = cleaned_events.sort_values("timestamp").reset_index(drop=True)
 
-        windows_df, window_feature_map = _load_windows_for_session(
+        windows_df, window_feature_map, node_feature_map = _load_windows_for_session(
             session_dir=session_dir,
             raw_streams=raw_streams,
             window_label=window_label,
@@ -195,6 +200,7 @@ def load_session_bundle(
                     raw_behavior_slice=raw_slice,
                     tab_level=tab_level,
                     window_features=feature_row,
+                    node_feature_map=node_feature_map,
                 )
             )
 
@@ -852,25 +858,48 @@ def _load_windows_for_session(
     session_dir: Path,
     raw_streams: dict[str, pd.DataFrame],
     window_label: str,
-) -> tuple[pd.DataFrame, dict[str, dict[str, object]]]:
-    features_path = session_dir / "features" / f"features_{window_label}.csv"
-    if features_path.exists():
-        features_df = pd.read_csv(features_path, low_memory=False)
-        if {"window_id", "window_start", "window_end"}.issubset(features_df.columns):
-            window_feature_map = {
-                str(row["window_id"]): {
-                    key: row[key]
-                    for key in features_df.columns
-                    if key not in {"session_id"}
-                }
-                for _, row in features_df.iterrows()
+) -> tuple[pd.DataFrame, dict[str, dict[str, object]], dict[tuple[str, str, str], dict[str, object]]]:
+    feature_frames: list[pd.DataFrame] = []
+    for modality in MODALITY_FEATURE_COLUMNS:
+        path = session_dir / "features" / modality / f"features_{modality}_{window_label}.csv"
+        if not path.exists():
+            continue
+        try:
+            frame = pd.read_csv(path, low_memory=False)
+        except Exception as exc:
+            LOGGER.warning("Failed to load %s: %s", path, exc)
+            continue
+        if {"window_id", "window_start", "window_end"}.issubset(frame.columns):
+            frame = frame.copy()
+            frame["window_id"] = frame["window_id"].astype(str)
+            feature_frames.append(frame)
+
+    window_feature_map: dict[str, dict[str, object]] = {}
+    if feature_frames:
+        combined = feature_frames[0].copy()
+        merge_keys = [col for col in _WINDOW_META_COLUMNS if col in combined.columns]
+        for frame in feature_frames[1:]:
+            frame_keys = [col for col in merge_keys if col in frame.columns]
+            if not frame_keys:
+                continue
+            combined = combined.merge(frame, on=frame_keys, how="outer")
+
+        combined = combined.sort_values(["window_start", "window_end"]).reset_index(drop=True)
+        window_feature_map = {
+            str(row["window_id"]): {
+                key: row[key]
+                for key in combined.columns
+                if key != "session_id"
             }
-            windows_df = features_df[["window_id", "window_start", "window_end"]].copy()
-            return windows_df, window_feature_map
+            for _, row in combined.iterrows()
+        }
+        windows_df = combined[["window_id", "window_start", "window_end"]].drop_duplicates().reset_index(drop=True)
+        node_feature_map = _load_node_feature_map(session_dir, window_label)
+        return windows_df, window_feature_map, node_feature_map
 
     available = [df for df in raw_streams.values() if df is not None and not df.empty and "timestamp" in df.columns]
     if not available:
-        return pd.DataFrame(columns=["window_id", "window_start", "window_end"]), {}
+        return pd.DataFrame(columns=["window_id", "window_start", "window_end"]), {}, {}
 
     config = next((cfg for cfg in DEFAULT_WINDOW_CONFIGS if cfg.label == window_label), None)
     if config is None:
@@ -883,7 +912,49 @@ def _load_windows_for_session(
     engine = WindowEngine()
     t_start, t_end = engine.session_span(*available)
     windows_df = engine.generate(t_start, t_end, config)
-    return windows_df, {}
+    return windows_df, {}, _load_node_feature_map(session_dir, window_label)
+
+
+def _load_node_feature_map(
+    session_dir: Path,
+    window_label: str,
+) -> dict[tuple[str, str, str], dict[str, object]]:
+    path = session_dir / "node_features" / f"node_features_{window_label}.csv"
+    if not path.exists():
+        return {}
+    try:
+        features_df = pd.read_csv(path, low_memory=False)
+    except Exception as exc:
+        LOGGER.warning("Failed to load %s: %s", path, exc)
+        return {}
+
+    required = {"window_id", "node_id", "node_type"}
+    if not required.issubset(features_df.columns):
+        return {}
+
+    features_df = features_df.copy()
+    features_df["window_id"] = features_df["window_id"].astype(str)
+    features_df["node_id"] = features_df["node_id"].fillna("").astype(str).str.strip()
+    features_df["node_type"] = features_df["node_type"].fillna("").astype(str).str.strip().str.lower()
+    features_df = features_df[
+        features_df["window_id"].ne("")
+        & features_df["node_id"].ne("")
+        & features_df["node_type"].ne("")
+    ].copy()
+    if features_df.empty:
+        return {}
+
+    payload_columns = [
+        col for col in NODE_FEATURE_COLUMNS
+        if col in features_df.columns and col not in {"session_id", "window_id", "node_id", "node_type"}
+    ]
+    return {
+        (str(row["window_id"]), str(row["node_id"]), str(row["node_type"])): {
+            col: row[col]
+            for col in payload_columns
+        }
+        for _, row in features_df.iterrows()
+    }
 
 
 def _build_window_graph(
@@ -895,6 +966,7 @@ def _build_window_graph(
     raw_behavior_slice: pd.DataFrame,
     tab_level: str,
     window_features: dict[str, object],
+    node_feature_map: dict[tuple[str, str, str], dict[str, object]],
 ) -> WindowGraphView:
     if window_events.empty:
         return WindowGraphView(
@@ -951,7 +1023,10 @@ def _build_window_graph(
                 key=f"app::{label}",
                 label=label,
                 node_kind="app",
-                features={
+                feature_node_type="app",
+                feature_node_id=label,
+                features=_build_app_feature_payload(
+                    base_features={
                     "type_app": row["type_app"],
                     "role": row["role"],
                     "usage_time": row["usage_time"],
@@ -961,7 +1036,11 @@ def _build_window_graph(
                     "centrality": row["centrality"],
                     "switch_in": row["switch_in"],
                     "switch_out": row["switch_out"],
-                },
+                    },
+                    window_id=window_id,
+                    node_id=label,
+                    node_feature_map=node_feature_map,
+                ),
             )
         )
 
@@ -972,7 +1051,10 @@ def _build_window_graph(
                 key=f"tab::{label}",
                 label=label,
                 node_kind="tab",
-                features={
+                feature_node_type=tab_level,
+                feature_node_id=label,
+                features=_build_tab_feature_payload(
+                    base_features={
                     "type_site": row["type_site"],
                     "role": row["role"],
                     "dwell_time": row["dwell_time"],
@@ -982,7 +1064,12 @@ def _build_window_graph(
                     "scroll_depth": row["scroll_depth"],
                     "tab_switch_rate": row["tab_switch_rate"],
                     "content_stability": row["content_stability"],
-                },
+                    },
+                    window_id=window_id,
+                    node_id=label,
+                    node_type=tab_level,
+                    node_feature_map=node_feature_map,
+                ),
             )
         )
 
@@ -1084,6 +1171,67 @@ def _build_window_graph(
         edges=edges,
         window_features=window_features,
     )
+
+
+def _build_app_feature_payload(
+    base_features: dict[str, object],
+    window_id: str,
+    node_id: str,
+    node_feature_map: dict[tuple[str, str, str], dict[str, object]],
+) -> dict[str, object]:
+    payload = {
+        "type_app": None,
+        "role": None,
+        "usage_time": None,
+        "frequency": None,
+        "scroll_intensity": None,
+        "interaction_rate": None,
+        "recency": None,
+        "task_affiliation": None,
+        "centrality": None,
+        "switch_in": None,
+        "switch_out": None,
+    }
+    payload.update(base_features)
+    payload.update(node_feature_map.get((window_id, node_id, "app"), {}))
+    return payload
+
+
+def _build_tab_feature_payload(
+    base_features: dict[str, object],
+    window_id: str,
+    node_id: str,
+    node_type: str,
+    node_feature_map: dict[tuple[str, str, str], dict[str, object]],
+) -> dict[str, object]:
+    payload = {
+        "type_site": None,
+        "role": None,
+        "dwell_time": None,
+        "usage_time": None,
+        "frequency": None,
+        "scroll_speed": None,
+        "scroll_intensity": None,
+        "interaction_rate": None,
+        "scroll_depth": None,
+        "recency": None,
+        "tab_switch_rate": None,
+        "content_stability": None,
+    }
+    payload.update(base_features)
+
+    exported = node_feature_map.get((window_id, node_id, node_type), {})
+    if "usage_time" in exported:
+        payload["usage_time"] = exported["usage_time"]
+        if payload.get("dwell_time") is None:
+            payload["dwell_time"] = exported["usage_time"]
+    if "frequency" in exported:
+        payload["frequency"] = exported["frequency"]
+    if "scroll_intensity" in exported:
+        payload["scroll_intensity"] = exported["scroll_intensity"]
+    if "interaction_rate" in exported:
+        payload["interaction_rate"] = exported["interaction_rate"]
+    return payload
 
 
 def _build_transition_table(
