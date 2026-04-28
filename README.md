@@ -1,110 +1,93 @@
-# Local Behavior Collection to InfluxDB v2
+# Behavior User Collecting
 
-This project contains two collectors that write raw behavioral events directly to InfluxDB v2 using line protocol (no JSON storage layer):
+Behavior User Collecting is a desktop-plus-browser instrumentation project for collecting behavioral data, transforming it into window features, and building temporal transition graphs.
 
-- `system_agent/`: desktop app focus/switch collector in Python
-- `extension/`: Chrome extension for browser tab/scroll tracking with idle detection (5 min inactivity)
+The repository currently centers on [`cognitive_system/`](cognitive_system/README.md), which contains:
 
-## 1) Configure Environment
+- a Windows system agent for app focus, keyboard, mouse, notification, system, and dual-task collection
+- a Chrome extension (`browser_agent_v2/`) for browser-side activity
+- a feature engineering pipeline that produces window features and event-based temporal graphs
+- a Tkinter viewer that shows one session as a table of window graphs
 
-1. Copy `.env.example` to `.env`.
-2. Fill in:
-   - `INFLUX_URL`
-   - `INFLUX_TOKEN`
-   - `INFLUX_ORG`
-   - `INFLUX_BUCKET`
+## What This Project Produces
 
-For the extension, copy the same env file into `extension/.env`:
+For each session, the runtime collectors can write raw CSV streams such as:
 
-```powershell
-Copy-Item .env extension/.env
+- `behavior.csv`
+- `keyboard.csv`
+- `mouse.csv`
+- `dual_task.csv`
+- `notification.csv`
+- `system_metrics.csv`
+- `labels.csv`
+
+The analysis pipeline then generates:
+
+- `features/features_<window>.csv`
+- `graph/nodes.csv`
+- `graph/edges.csv`
+- `graph/temporal_edges.csv`
+- `graph/windows/<window>/...`
+- `graph/communities.csv` when clustering is available
+
+## Important Graph Note
+
+The graph system is now a true temporal transition graph:
+
+- nodes represent user states such as app, domain, or URL
+- edges come from sequential events: `event[i] -> event[i+1]`
+- windows are used only for slicing and feature extraction
+- windows are never graph nodes
+
+## Repository Layout
+
+```text
+Behavior User Collecting/
+|- README.md
+|- Architecture.md
+|- cognitive_system/
+|  |- README.md
+|  |- HOW_TO_RUN.md
+|  |- requirements.txt
+|  |- setup.py
+|  |- data/
+|  |- browser_agent_v2/
+|  |- system_agent/
+|  `- feature_engineering/
+`- .env.example
 ```
 
-## 2) Run System Agent
+## Quick Start
+
+From the repository root:
 
 ```powershell
+cd cognitive_system
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r system_agent/requirements.txt
-python system_agent/main.py
-# Optional bounded session (example: 45 minutes)
-python system_agent/main.py --session-minutes 45
+pip install -r requirements.txt
 ```
 
-## 3) Load Chrome Extension
+Start the collector:
 
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select the `extension/` folder.
-
-## 4) Verify in InfluxDB
-
-You can verify writes in Influx Data Explorer or with Flux:
-
-```flux
-from(bucket: "YOUR_BUCKET")
-  |> range(start: -15m)
-  |> filter(fn: (r) => r._measurement == "behavior_events")
-  |> sort(columns: ["_time"], desc: true)
+```powershell
+.\.venv\Scripts\python system_agent\main.py
 ```
 
-## Event Tags and Fields
+Run the analysis pipeline for a completed session:
 
-Common tags:
-- `user_id` (`u1`)
-- `source_type` (`app` or `tab`)
-- `event_type` (`focus`, `switch`, `idle`, `scroll`)
+```powershell
+.\.venv\Scripts\python -m feature_engineering.pipeline <session_id> --graph-node-level app
+```
 
-Additional tags:
-- System agent: `app_name`
-- Browser agent: `domain`
+Open the window-graph viewer:
 
-Common fields include:
-- `duration`
-- `scroll_delta`
-- `scroll_depth`
+```powershell
+.\.venv\Scripts\python -m feature_engineering.graph_viewer --session-id <session_id> --window-label 30s
+```
 
-## Parameters of system agent
-### InfluxBatchClient
+## Documentation
 
-url=influx_url
-Adresse de ton InfluxDB (ex: http://localhost:8086).
-
-token=influx_token
-Jeton d’authentification pour écrire dans InfluxDB.
-
-org=influx_org
-Nom de l’organisation InfluxDB.
-
-bucket=influx_bucket
-Nom du bucket où les points sont stockés.
-
-batch_size=100
-Dès que le buffer atteint 100 événements, envoi immédiat vers InfluxDB.
-
-flush_interval=3.0
-Même si le batch n’a pas 100 événements, il force un envoi toutes les 3 secondes.
-
-max_retries=3
-Si l’envoi échoue (réseau/API), il réessaie jusqu’à 3 fois.
-
-request_timeout=10.0
-Chaque requête HTTP attend max 10 secondes avant timeout.
-
-### BehaviorCollector
-
-influx_client=influx_client
-Le collector utilise ce client pour pousser les événements vers InfluxDB.
-
-user_id="u1"
-Identifiant utilisateur écrit en tag dans chaque événement.
-
-poll_interval=0.5
-Toutes les 0,5 secondes, il vérifie quelle app est active (Chrome, Code, etc.).
-
-emit_interval=30.0
-S’il n’y a pas de switch, il génère un événement toutes les 30 secondes pour l’app courante.
-
-merge_flush_threshold=30.0
-Il fusionne les segments continus d’une même app, puis les flush quand la durée fusionnée atteint 30s (ou plus tôt si switch/shutdown).
+- Runtime and module overview: [cognitive_system/README.md](cognitive_system/README.md)
+- Step-by-step usage: [cognitive_system/HOW_TO_RUN.md](cognitive_system/HOW_TO_RUN.md)
+- Full architecture and diagrams: [Architecture.md](Architecture.md)
