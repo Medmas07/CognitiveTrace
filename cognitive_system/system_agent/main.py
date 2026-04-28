@@ -220,16 +220,54 @@ class CognitiveSystemAgent:
             )
             return
 
+        session_id_snap = str(payload.get("session_id") or "")
+        is_post_session = (
+            self._pending_questionnaire_mode == "post_session"
+            or not self.session_manager.active
+        )
+
         self.data_writer.write_labels(payload)
         await self._cancel_task(self._questionnaire_timeout_task)
         self._questionnaire_timeout_task = None
-        if self._pending_questionnaire_mode == "post_session" or not self.session_manager.active:
+        if is_post_session:
             self.data_writer.end_session()
         self._awaiting_questionnaire = False
         self._pending_questionnaire_session_id = None
         self._pending_questionnaire_mode = None
-        self._questionnaire_done.set()
         LOGGER.info("Questionnaire received and persisted")
+
+        if session_id_snap and is_post_session:
+            try:
+                await self._run_post_session_pipeline(session_id_snap)
+            except Exception as exc:
+                LOGGER.error("Post-session pipeline error: %s", exc)
+
+        self._questionnaire_done.set()
+
+    async def _run_post_session_pipeline(self, session_id: str) -> None:
+        """Run the feature-engineering pipeline then open the graph viewer."""
+        import sys
+        from pathlib import Path as _Path
+
+        cwd = str(_Path(__file__).resolve().parent.parent)  # cognitive_system/
+
+        LOGGER.info("Running feature pipeline for session %s ...", session_id)
+        pipeline_proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-B", "-m", "feature_engineering.pipeline",
+            session_id, "--graph-node-level", "app", "--log-level", "INFO",
+            cwd=cwd,
+        )
+        returncode = await pipeline_proc.wait()
+        if returncode != 0:
+            LOGGER.error("Feature pipeline exited with code %d — skipping graph viewer.", returncode)
+            return
+
+        LOGGER.info("Pipeline complete. Launching graph viewer for session %s ...", session_id)
+        await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "feature_engineering.graph_viewer",
+            "--session-id", session_id,
+            cwd=cwd,
+        )
 
     async def _handle_heartbeat(self, _: dict) -> dict:
         return {

@@ -78,8 +78,8 @@ class DesktopQuestionnaireApp:
             font=("Segoe UI", 10),
         ).pack(anchor="w", pady=(8, 0))
 
-        outer = tk.Frame(root, bg="#eef4fb", padx=18, pady=(0, 14))
-        outer.pack(fill="both", expand=True)
+        outer = tk.Frame(root, bg="#eef4fb", padx=18, pady=0)
+        outer.pack(fill="both", expand=True, pady=(0, 14))
 
         canvas = tk.Canvas(outer, bg="#eef4fb", highlightthickness=0)
         scrollbar = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
