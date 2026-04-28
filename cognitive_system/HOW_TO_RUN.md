@@ -37,6 +37,13 @@ This file controls shared runtime values such as:
 - default agent mode
 - default duration
 - default Influx settings
+- dual-task timing defaults and randomization behavior
+
+Dual-task note:
+
+- `dual_task_interval_seconds` is the base delay between probes
+- `dual_task_interval_jitter_ratio` randomizes the actual delay around that base interval
+- `dual_task_randomize_position` randomizes where the probe window appears on screen
 
 If you enable Influx export, keep `INFLUXDB_TOKEN` in your environment.
 
@@ -87,7 +94,7 @@ What happens at runtime:
 - the system agent owns session timing
 - the extension only records when the agent instructs it to
 - browser recording pauses and resumes based on browser foreground status
-- dual-task probes may appear depending on the selected mode
+- dual-task probes may appear depending on the selected mode, with randomized timing and position
 - the questionnaire is opened by the agent at session end when enabled
 - the popup should show `online` once the extension connects to the running desktop app
 

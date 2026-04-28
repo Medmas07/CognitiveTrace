@@ -23,6 +23,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
@@ -82,6 +92,14 @@ def _shared_int(default: int, *keys: str) -> int:
         return default
 
 
+def _shared_float(default: float, *keys: str) -> float:
+    value = _shared_get(*keys, default=default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _coerce_bool(value: Any) -> bool | None:
     if isinstance(value, bool):
         return value
@@ -118,6 +136,15 @@ class RuntimeConfig:
     questionnaire_enabled: bool
     dual_task_interval_seconds: int
     dual_task_timeout_seconds: int
+    dual_task_interval_jitter_ratio: float = field(
+        default_factory=lambda: _env_float(
+            "DUAL_TASK_INTERVAL_JITTER_RATIO",
+            _shared_float(0.5, "agent", "dual_task_interval_jitter_ratio"),
+        )
+    )
+    dual_task_randomize_position: bool = field(
+        default_factory=lambda: _shared_bool(True, "agent", "dual_task_randomize_position")
+    )
     keyboard_tracking_enabled: bool = True
     mouse_tracking_enabled: bool = True
     notification_tracking_enabled: bool = True
@@ -243,6 +270,19 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--dual-task-interval-jitter-ratio",
+        type=float,
+        default=_env_float(
+            "DUAL_TASK_INTERVAL_JITTER_RATIO",
+            _shared_float(0.5, "agent", "dual_task_interval_jitter_ratio"),
+        ),
+    )
+    parser.add_argument(
+        "--dual-task-randomize-position",
+        action=argparse.BooleanOptionalAction,
+        default=_shared_bool(True, "agent", "dual_task_randomize_position"),
+    )
+    parser.add_argument(
         "--keyboard-tracking-enabled",
         action=argparse.BooleanOptionalAction,
         default=_shared_bool(True, "agent", "keyboard_tracking_enabled"),
@@ -357,6 +397,7 @@ def build_runtime_config(argv: Sequence[str] | None = None) -> RuntimeConfig:
 
     dual_interval = args.dual_task_interval_seconds
     dual_timeout = args.dual_task_timeout_seconds
+    dual_jitter_ratio = max(0.0, float(args.dual_task_interval_jitter_ratio))
     if dual_task_enabled and interactive:
         dual_interval = _prompt_int("Dual-task interval (seconds)", dual_interval, min_value=5)
         dual_timeout = _prompt_int("Dual-task timeout (seconds)", dual_timeout, min_value=1)
@@ -373,6 +414,8 @@ def build_runtime_config(argv: Sequence[str] | None = None) -> RuntimeConfig:
         questionnaire_enabled=questionnaire_enabled,
         dual_task_interval_seconds=dual_interval,
         dual_task_timeout_seconds=dual_timeout,
+        dual_task_interval_jitter_ratio=dual_jitter_ratio,
+        dual_task_randomize_position=bool(args.dual_task_randomize_position),
         keyboard_tracking_enabled=args.keyboard_tracking_enabled,
         mouse_tracking_enabled=args.mouse_tracking_enabled,
         notification_tracking_enabled=args.notification_tracking_enabled,

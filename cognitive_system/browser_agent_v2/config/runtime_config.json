@@ -13,7 +13,9 @@
     "dual_task_enabled": true,
     "questionnaire_enabled": true,
     "dual_task_interval_seconds": 30,
+    "dual_task_interval_jitter_ratio": 0.5,
     "dual_task_timeout_seconds": 3,
+    "dual_task_randomize_position": true,
     "keyboard_tracking_enabled": true,
     "mouse_tracking_enabled": true
   },

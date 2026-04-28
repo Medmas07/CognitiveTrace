@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import sys
 import time
 import uuid
@@ -64,6 +65,7 @@ class CognitiveSystemAgent:
     def __init__(self, config: RuntimeConfig):
         self.config = config
         self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self._rng = random.Random()
 
         self.data_writer = DataWriter(config)
         self.session_manager = SessionManager(
@@ -488,11 +490,11 @@ class CognitiveSystemAgent:
             await asyncio.sleep(0.5)
 
     async def _dual_task_loop(self) -> None:
-        interval = max(5, self.config.dual_task_interval_seconds)
         timeout_ms = int(max(1, self.config.dual_task_timeout_seconds) * 1000)
 
         while self.session_manager.active:
-            await asyncio.sleep(interval)
+            scheduled_delay_seconds = self._sample_dual_task_delay_seconds()
+            await asyncio.sleep(scheduled_delay_seconds)
             if not self.session_manager.active:
                 return
             snapshot = self.session_manager.snapshot()
@@ -503,7 +505,11 @@ class CognitiveSystemAgent:
             probe_id = f"probe_{uuid.uuid4().hex[:8]}"
             result = await self.loop.run_in_executor(
                 None,
-                lambda: self._dual_task_mgr.run_probe(probe_id, timeout_ms),
+                lambda: self._dual_task_mgr.run_probe(
+                    probe_id,
+                    timeout_ms,
+                    randomize_position=self.config.dual_task_randomize_position,
+                ),
             )
             if not snapshot.session_id:
                 continue
@@ -515,8 +521,12 @@ class CognitiveSystemAgent:
                 "device_id": self.config.device_id,
                 "reaction_time_ms": result.reaction_time_ms,
                 "success": result.success,
+                "miss": result.miss,
                 "error": result.error,
                 "app_name": current_snap.app_name if current_snap else "unknown",
+                "scheduled_delay_seconds": round(scheduled_delay_seconds, 2),
+                "probe_left_px": result.probe_left_px,
+                "probe_top_px": result.probe_top_px,
             }
             # Part 5: minimal validation — drop events without identity fields
             if dt_event.get("session_id") and dt_event.get("timestamp"):
@@ -542,6 +552,16 @@ class CognitiveSystemAgent:
                 **self.session_manager.snapshot().to_dict(),
             }
         )
+
+    def _sample_dual_task_delay_seconds(self) -> float:
+        base_interval = max(5.0, float(self.config.dual_task_interval_seconds))
+        jitter_ratio = max(0.0, float(self.config.dual_task_interval_jitter_ratio))
+        if jitter_ratio <= 0:
+            return base_interval
+
+        min_delay = max(5.0, base_interval * (1.0 - jitter_ratio))
+        max_delay = max(min_delay, base_interval * (1.0 + jitter_ratio))
+        return self._rng.uniform(min_delay, max_delay)
 
     async def _request_questionnaire(self, session_id: str, mode: str) -> None:
         await self._cancel_task(self._questionnaire_timeout_task)
@@ -692,6 +712,9 @@ class CognitiveSystemAgent:
             f"CSV export           : {self.config.csv_enabled}\n"
             f"Influx export        : {self.config.influx_enabled}\n"
             f"Dual-task            : {self.config.dual_task_enabled}\n"
+            f"Dual-task interval   : {self.config.dual_task_interval_seconds} s base\n"
+            f"Dual-task jitter     : {self.config.dual_task_interval_jitter_ratio:.2f}\n"
+            f"Dual-task position   : {'randomized' if self.config.dual_task_randomize_position else 'centered'}\n"
             f"Questionnaire        : {self.config.questionnaire_enabled}\n"
             f"Notifications        : {self.config.notification_tracking_enabled}\n"
             f"System metrics       : {self.config.system_metrics_enabled}\n"

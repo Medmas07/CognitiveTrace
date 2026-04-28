@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import threading
 import time
 from dataclasses import dataclass
@@ -14,6 +15,8 @@ class DualTaskResult:
     success: bool
     miss: bool
     error: bool
+    probe_left_px: int
+    probe_top_px: int
 
 
 class DualTaskManager:
@@ -23,12 +26,23 @@ class DualTaskManager:
     timeout fires, then returns a DualTaskResult.
     """
 
-    def run_probe(self, probe_id: str, timeout_ms: int = 3000) -> DualTaskResult:
+    def __init__(self) -> None:
+        self._rng = random.Random()
+
+    def run_probe(
+        self,
+        probe_id: str,
+        timeout_ms: int = 3000,
+        *,
+        randomize_position: bool = True,
+    ) -> DualTaskResult:
         result: dict = {
             "reaction_time_ms": 0.0,
             "success": False,
             "miss": False,
             "error": False,
+            "probe_left_px": 0,
+            "probe_top_px": 0,
         }
         done = threading.Event()
 
@@ -45,10 +59,18 @@ class DualTaskManager:
             # Always on top of every other window
             root.attributes("-topmost", True)
             root.resizable(False, False)
-            # Center on screen
+            probe_width = 240
+            probe_height = 160
             sw = root.winfo_screenwidth()
             sh = root.winfo_screenheight()
-            root.geometry(f"240x160+{sw // 2 - 120}+{sh // 2 - 80}")
+            if randomize_position:
+                x, y = self._random_probe_position(sw, sh, probe_width, probe_height)
+            else:
+                x = max(0, sw // 2 - probe_width // 2)
+                y = max(0, sh // 2 - probe_height // 2)
+            result["probe_left_px"] = x
+            result["probe_top_px"] = y
+            root.geometry(f"{probe_width}x{probe_height}+{x}+{y}")
             root.configure(bg="#0c1223")
 
             start_ns = time.perf_counter_ns()
@@ -109,4 +131,23 @@ class DualTaskManager:
             success=result["success"],
             miss=result["miss"],
             error=result["error"],
+            probe_left_px=result["probe_left_px"],
+            probe_top_px=result["probe_top_px"],
+        )
+
+    def _random_probe_position(
+        self,
+        screen_width: int,
+        screen_height: int,
+        probe_width: int,
+        probe_height: int,
+    ) -> tuple[int, int]:
+        margin_px = 48
+        max_x = max(margin_px, screen_width - probe_width - margin_px)
+        max_y = max(margin_px, screen_height - probe_height - margin_px)
+        min_x = min(margin_px, max_x)
+        min_y = min(margin_px, max_y)
+        return (
+            self._rng.randint(min_x, max_x),
+            self._rng.randint(min_y, max_y),
         )
