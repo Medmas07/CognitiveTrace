@@ -382,3 +382,8 @@ def build_runtime_config(argv: Sequence[str] | None = None) -> RuntimeConfig:
 
     config.data_dir.mkdir(parents=True, exist_ok=True)
     return config
+
+
+def build_default_runtime_config() -> RuntimeConfig:
+    """Return the shared-config-driven defaults without CLI prompts."""
+    return build_runtime_config(["--non-interactive"])

@@ -33,6 +33,7 @@ from system_agent.extension_server import ExtensionServer
 from system_agent.keyboard_tracker import KeyboardTracker
 from system_agent.mouse_tracker import MouseTracker
 from system_agent.notification_tracker import NotificationTracker
+from system_agent.questionnaire_app import DesktopQuestionnaireApp
 from system_agent.session_manager import SessionManager
 from system_agent.system_metrics import SystemMetricsCollector
 from system_agent.ui_overlay import UIOverlay
@@ -80,6 +81,7 @@ class CognitiveSystemAgent:
         # context_provider (a bound method) is valid when passed below.
         self._context_tracker = ContextTracker(on_finalized=self._on_context_finalized)
         self._dual_task_mgr = DualTaskManager()
+        self._desktop_questionnaire = DesktopQuestionnaireApp()
         self._hotkey_listener = None  # pynput GlobalHotKeys instance
 
         self.keyboard_tracker = KeyboardTracker(
@@ -118,7 +120,10 @@ class CognitiveSystemAgent:
         self._session_finished = asyncio.Event()
         self._awaiting_questionnaire = False
         self._pending_questionnaire_session_id: Optional[str] = None
+        self._pending_questionnaire_mode: Optional[str] = None
         self._questionnaire_done = asyncio.Event()
+        self._questionnaire_task: Optional[asyncio.Task] = None
+        self._questionnaire_timeout_task: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------
     # Incoming extension callbacks
@@ -216,9 +221,13 @@ class CognitiveSystemAgent:
             return
 
         self.data_writer.write_labels(payload)
-        self.data_writer.end_session()
+        await self._cancel_task(self._questionnaire_timeout_task)
+        self._questionnaire_timeout_task = None
+        if self._pending_questionnaire_mode == "post_session" or not self.session_manager.active:
+            self.data_writer.end_session()
         self._awaiting_questionnaire = False
         self._pending_questionnaire_session_id = None
+        self._pending_questionnaire_mode = None
         self._questionnaire_done.set()
         LOGGER.info("Questionnaire received and persisted")
 
@@ -404,15 +413,7 @@ class CognitiveSystemAgent:
             and session_id is not None
         )
         if should_open_questionnaire:
-            self._awaiting_questionnaire = True
-            self._pending_questionnaire_session_id = session_id
-            await self.extension_server.broadcast(
-                {
-                    "type": "open_questionnaire",
-                    "session_id": session_id,
-                }
-            )
-            print("Questionnaire opened in browser. Waiting for submission...")
+            await self._request_questionnaire(session_id, mode="post_session")
         else:
             self.data_writer.end_session()
 
@@ -498,6 +499,77 @@ class CognitiveSystemAgent:
             }
         )
 
+    async def _request_questionnaire(self, session_id: str, mode: str) -> None:
+        await self._cancel_task(self._questionnaire_timeout_task)
+        self._questionnaire_timeout_task = None
+        self._awaiting_questionnaire = True
+        self._pending_questionnaire_session_id = session_id
+        self._pending_questionnaire_mode = mode
+        self._questionnaire_done.clear()
+        self._questionnaire_timeout_task = asyncio.create_task(
+            self._questionnaire_timeout_after(900),
+            name="questionnaire-timeout",
+        )
+
+        if self.extension_server.has_connected_clients:
+            await self.extension_server.broadcast(
+                {
+                    "type": "open_questionnaire",
+                    "session_id": session_id,
+                }
+            )
+            print("Questionnaire opened in browser. Waiting for submission...")
+            return
+
+        LOGGER.info("No extension client connected; opening desktop questionnaire.")
+        self._questionnaire_task = asyncio.create_task(
+            self._show_desktop_questionnaire(session_id),
+            name="desktop-questionnaire",
+        )
+
+    async def _questionnaire_timeout_after(self, timeout_seconds: int) -> None:
+        try:
+            await asyncio.sleep(timeout_seconds)
+        except asyncio.CancelledError:
+            return
+
+        if not self._awaiting_questionnaire:
+            return
+
+        LOGGER.warning("Questionnaire timeout reached.")
+        if self._pending_questionnaire_mode == "post_session" or not self.session_manager.active:
+            self.data_writer.end_session()
+        self._awaiting_questionnaire = False
+        self._pending_questionnaire_session_id = None
+        self._pending_questionnaire_mode = None
+        self._questionnaire_timeout_task = None
+        self._questionnaire_done.set()
+
+    async def _show_desktop_questionnaire(self, session_id: str) -> None:
+        try:
+            if self.loop is None:
+                return
+
+            result = await self.loop.run_in_executor(
+                None,
+                lambda: self._desktop_questionnaire.collect(session_id, timeout_seconds=900),
+            )
+            if result:
+                await self._handle_questionnaire_results(result)
+                return
+
+            LOGGER.warning("Desktop questionnaire closed without submission.")
+            await self._cancel_task(self._questionnaire_timeout_task)
+            self._questionnaire_timeout_task = None
+            if self._pending_questionnaire_mode == "post_session" or not self.session_manager.active:
+                self.data_writer.end_session()
+            self._awaiting_questionnaire = False
+            self._pending_questionnaire_session_id = None
+            self._pending_questionnaire_mode = None
+            self._questionnaire_done.set()
+        finally:
+            self._questionnaire_task = None
+
     @staticmethod
     async def _cancel_task(task: Optional[asyncio.Task]) -> None:
         if not task or task.done():
@@ -520,9 +592,13 @@ class CognitiveSystemAgent:
             await asyncio.wait_for(self._questionnaire_done.wait(), timeout=900)
         except asyncio.TimeoutError:
             LOGGER.warning("Questionnaire timeout (15 minutes). Closing session files.")
-            self.data_writer.end_session()
+            if self._pending_questionnaire_mode == "post_session" or not self.session_manager.active:
+                self.data_writer.end_session()
+            await self._cancel_task(self._questionnaire_timeout_task)
+            self._questionnaire_timeout_task = None
             self._awaiting_questionnaire = False
             self._pending_questionnaire_session_id = None
+            self._pending_questionnaire_mode = None
 
     # ── Part 5: global hotkey to trigger questionnaire mid-session ────────────
 
@@ -558,12 +634,8 @@ class CognitiveSystemAgent:
         session_id = self.session_manager.session_id
         if not session_id:
             return
-        self._awaiting_questionnaire = True
-        self._pending_questionnaire_session_id = session_id
-        await self.extension_server.broadcast(
-            {"type": "open_questionnaire", "session_id": session_id}
-        )
-        print("\n[QUESTIONNAIRE] Triggered via hotkey. Waiting for submission in browser...")
+        await self._request_questionnaire(session_id, mode="in_session")
+        print("\n[QUESTIONNAIRE] Triggered. Waiting for submission...")
 
     def _print_banner(self) -> None:
         print(
@@ -585,22 +657,27 @@ class CognitiveSystemAgent:
             f"Data directory       : {self.config.data_dir}\n"
         )
 
-    async def run(self) -> None:
+    async def run(self, *, wait_for_user_start: bool = True) -> None:
         self.loop = asyncio.get_running_loop()
         try:
             await self.extension_server.start()
             self.app_tracker.start()
-            self._print_banner()
+            if wait_for_user_start:
+                self._print_banner()
             self._setup_questionnaire_hotkey()  # Part 5: Ctrl+Shift+Q
 
-            start = await self._wait_for_user_start()
-            if not start:
-                print("Session not started.")
-                return
+            if wait_for_user_start:
+                start = await self._wait_for_user_start()
+                if not start:
+                    print("Session not started.")
+                    return
 
             await self.start_session()
-            print("Session running. Recording pauses/resumes automatically with browser foreground.")
-            print("Use Ctrl+C to stop early.\n")
+            if wait_for_user_start:
+                print("Session running. Recording pauses/resumes automatically with browser foreground.")
+                print("Use Ctrl+C to stop early.\n")
+            else:
+                LOGGER.info("Session running with launcher-managed startup.")
 
             while not self._session_finished.is_set():
                 await asyncio.sleep(0.5)
@@ -611,6 +688,10 @@ class CognitiveSystemAgent:
                 await self.stop_session(reason="shutdown", open_questionnaire=False)
             except Exception:
                 pass
+            await self._cancel_task(self._questionnaire_task)
+            self._questionnaire_task = None
+            await self._cancel_task(self._questionnaire_timeout_task)
+            self._questionnaire_timeout_task = None
             # Stop the pynput hotkey listener (if it was registered successfully)
             if self._hotkey_listener is not None:
                 try:
@@ -647,4 +728,3 @@ def main(argv: Optional[list[str]] = None) -> None:
 
 if __name__ == "__main__":
     main()
-

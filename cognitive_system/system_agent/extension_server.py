@@ -82,6 +82,10 @@ class ExtensionServer:
                 disconnected.add(client)
         self._ws_clients -= disconnected
 
+    @property
+    def has_connected_clients(self) -> bool:
+        return bool(self._ws_clients)
+
     async def _start_websocket(self) -> None:
         self._ws_server = await websockets.serve(
             self._ws_handler,
