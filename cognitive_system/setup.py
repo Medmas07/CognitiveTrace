@@ -26,9 +26,10 @@ run([pip, "install", "--upgrade", "pip"])
 run([pip, "install", "-r", REQ])
 
 print("\nSetup complete.")
-print("Start the system agent with:")
+print("Launch the desktop application with:")
 if os.name == "nt":
-    print(f"  .venv\\Scripts\\python system_agent\\main.py")
+    print(f"  .venv\\Scripts\\python -m system_agent")
+    print("  or double-click run_collector.pyw after dependencies are installed")
 else:
-    print(f"  .venv/bin/python system_agent/main.py")
+    print(f"  .venv/bin/python -m system_agent")
 print("\nThen load the browser_agent_v2/ folder as an unpacked Chrome extension.")

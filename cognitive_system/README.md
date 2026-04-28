@@ -120,6 +120,8 @@ pip install -r requirements.txt
 
 `requirements.txt` includes both runtime and analysis dependencies. `setup.py` is still available as a quick helper, but it installs only the `system_agent` requirements.
 
+After dependencies are installed on Windows, users can also start the desktop launcher by double-clicking `run_collector.pyw`.
+
 ## See Also
 
 - Run instructions: [HOW_TO_RUN.md](HOW_TO_RUN.md)

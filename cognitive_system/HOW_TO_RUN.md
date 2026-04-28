@@ -40,15 +40,21 @@ This file controls shared runtime values such as:
 
 If you enable Influx export, keep `INFLUXDB_TOKEN` in your environment.
 
-## 3. Start The System Agent
+## 3. Start The Desktop Application
 
 From `cognitive_system/`:
 
 ```powershell
-.\.venv\Scripts\python system_agent\main.py
+.\.venv\Scripts\python -m system_agent
 ```
 
-The startup flow will ask for:
+This is the recommended entry point for other users because it opens the desktop launcher.
+
+Windows Explorer option:
+
+- after dependencies are installed, you can also launch the same desktop app by double-clicking `run_collector.pyw`
+
+The launcher lets the user choose:
 
 - mode
 - session duration
@@ -56,6 +62,12 @@ The startup flow will ask for:
 - Influx export enabled or disabled
 - dual-task enabled or disabled
 - questionnaire enabled or disabled
+
+CLI fallback:
+
+```powershell
+.\.venv\Scripts\python system_agent\main.py
+```
 
 You can also run it non-interactively with CLI flags defined in `system_agent/config.py`.
 
@@ -68,6 +80,8 @@ In Chrome:
 3. Click Load unpacked
 4. Select `cognitive_system/browser_agent_v2`
 
+In Edge, use the same steps from `edge://extensions`.
+
 What happens at runtime:
 
 - the system agent owns session timing
@@ -75,6 +89,9 @@ What happens at runtime:
 - browser recording pauses and resumes based on browser foreground status
 - dual-task probes may appear depending on the selected mode
 - the questionnaire is opened by the agent at session end when enabled
+- the popup should show `online` once the extension connects to the running desktop app
+
+If you change `browser_agent_v2/config/runtime_config.json`, restart the desktop app and reload the extension.
 
 ## 5. Check Raw Session Output
 
