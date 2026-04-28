@@ -162,11 +162,9 @@ class DesktopQuestionnaireApp:
             output.pack(side="left", padx=(10, 0))
             outputs[field.key] = output
 
-            def _sync(_value=None, *, key=field.key) -> None:
-                outputs[key].config(text=str(variables[key].get()))
-
-            scale.configure(command=_sync)
-            _sync()
+            scale.configure(
+                command=lambda v, lbl=output: lbl.config(text=str(int(float(v))))
+            )
 
         footer = tk.Frame(root, bg="#eef4fb", padx=20, pady=16)
         footer.pack(fill="x")
