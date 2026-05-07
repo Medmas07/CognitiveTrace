@@ -3,7 +3,15 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, replace
 
-from .config import MODE_PRODUCTION, RuntimeConfig, VALID_MODES, build_default_runtime_config
+from .config import (
+    DUAL_TASK_INTERVAL_RANDOM,
+    DUAL_TASK_INTERVAL_REGULAR,
+    MODE_PRODUCTION,
+    RuntimeConfig,
+    VALID_DUAL_TASK_INTERVAL_MODES,
+    VALID_MODES,
+    build_default_runtime_config,
+)
 from .dependency_validation import validate_runtime_dependencies
 from .main import CognitiveSystemAgent
 
@@ -88,6 +96,14 @@ class StartupLauncher:
         csv_var = tk.BooleanVar(value=self.config.csv_enabled)
         influx_var = tk.BooleanVar(value=self.config.influx_enabled)
         dual_task_var = tk.BooleanVar(value=self.config.dual_task_enabled)
+        interval_mode_default = self.config.dual_task_interval_mode
+        if interval_mode_default not in VALID_DUAL_TASK_INTERVAL_MODES:
+            interval_mode_default = DUAL_TASK_INTERVAL_REGULAR
+        dual_interval_mode_var = tk.StringVar(value=interval_mode_default)
+        dual_interval_var = tk.StringVar(value=str(self.config.dual_task_interval_seconds))
+        dual_random_min_var = tk.StringVar(value=str(self.config.dual_task_random_min_seconds))
+        dual_random_max_var = tk.StringVar(value=str(self.config.dual_task_random_max_seconds))
+        dual_timeout_var = tk.StringVar(value=str(self.config.dual_task_timeout_seconds))
         questionnaire_var = tk.BooleanVar(value=self.config.questionnaire_enabled)
         keyboard_var = tk.BooleanVar(value=self.config.keyboard_tracking_enabled)
         mouse_var = tk.BooleanVar(value=self.config.mouse_tracking_enabled)
@@ -174,6 +190,59 @@ class StartupLauncher:
             checkbox.grid(row=index // 2, column=index % 2, sticky="w", padx=(0, 24), pady=4)
             checkbox_widgets[label_text] = checkbox
 
+        timing_section = _field_row(
+            "Dual task timing",
+            "Use a regular fixed interval or a random delay between two probes.",
+        )
+        timing_grid = tk.Frame(timing_section, bg="#ffffff")
+        timing_grid.pack(fill="x")
+        timing_grid.grid_columnconfigure(1, weight=1)
+
+        tk.Label(
+            timing_grid,
+            text="Interval mode",
+            bg="#ffffff",
+            fg="#4f6478",
+            font=("Segoe UI", 10),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 14), pady=4)
+        dual_task_mode_box = ttk.Combobox(
+            timing_grid,
+            textvariable=dual_interval_mode_var,
+            values=list(VALID_DUAL_TASK_INTERVAL_MODES),
+            width=14,
+            state="readonly",
+        )
+        dual_task_mode_box.grid(row=0, column=1, sticky="w", pady=4)
+
+        def _timing_spinbox_row(
+            row: int,
+            label_text: str,
+            variable: tk.StringVar,
+            min_value: int,
+        ) -> tk.Spinbox:
+            tk.Label(
+                timing_grid,
+                text=label_text,
+                bg="#ffffff",
+                fg="#4f6478",
+                font=("Segoe UI", 10),
+            ).grid(row=row, column=0, sticky="w", padx=(0, 14), pady=4)
+            spinbox = tk.Spinbox(
+                timing_grid,
+                from_=min_value,
+                to=86400,
+                textvariable=variable,
+                width=10,
+                font=("Segoe UI", 10),
+            )
+            spinbox.grid(row=row, column=1, sticky="w", pady=4)
+            return spinbox
+
+        dual_interval_input = _timing_spinbox_row(1, "Regular interval (sec)", dual_interval_var, 5)
+        dual_random_min_input = _timing_spinbox_row(2, "Random minimum (sec)", dual_random_min_var, 5)
+        dual_random_max_input = _timing_spinbox_row(3, "Random maximum (sec)", dual_random_max_var, 5)
+        dual_timeout_input = _timing_spinbox_row(4, "Probe timeout (sec)", dual_timeout_var, 1)
+
         data_dir_section = _field_row("Data directory")
         tk.Label(
             data_dir_section,
@@ -186,6 +255,29 @@ class StartupLauncher:
             wraplength=600,
         ).pack(anchor="w")
 
+        def _sync_dual_task_controls(*_args) -> None:
+            production_mode = mode_var.get().strip().lower() == MODE_PRODUCTION
+            dual_enabled = bool(dual_task_var.get()) and not production_mode
+            interval_mode = dual_interval_mode_var.get().strip().lower()
+            if interval_mode not in VALID_DUAL_TASK_INTERVAL_MODES:
+                interval_mode = DUAL_TASK_INTERVAL_REGULAR
+                dual_interval_mode_var.set(interval_mode)
+
+            dual_task_mode_box.config(state="readonly" if dual_enabled else "disabled")
+            dual_interval_input.config(
+                state="normal"
+                if dual_enabled and interval_mode == DUAL_TASK_INTERVAL_REGULAR
+                else "disabled"
+            )
+            random_state = (
+                "normal"
+                if dual_enabled and interval_mode == DUAL_TASK_INTERVAL_RANDOM
+                else "disabled"
+            )
+            dual_random_min_input.config(state=random_state)
+            dual_random_max_input.config(state=random_state)
+            dual_timeout_input.config(state="normal" if dual_enabled else "disabled")
+
         def _apply_mode_rules(*_args) -> None:
             production_mode = mode_var.get().strip().lower() == MODE_PRODUCTION
             if production_mode:
@@ -194,8 +286,11 @@ class StartupLauncher:
             state = "disabled" if production_mode else "normal"
             checkbox_widgets["Dual task"].config(state=state)
             checkbox_widgets["Questionnaire"].config(state=state)
+            _sync_dual_task_controls()
 
         mode_var.trace_add("write", _apply_mode_rules)
+        dual_task_var.trace_add("write", _sync_dual_task_controls)
+        dual_interval_mode_var.trace_add("write", _sync_dual_task_controls)
         _apply_mode_rules()
 
         note = tk.Frame(shell, bg="#edf3fb", pady=14)
@@ -244,14 +339,63 @@ class StartupLauncher:
                 status_var.set("Enable at least one export sink: CSV or InfluxDB.")
                 return
 
+            production_mode = mode == MODE_PRODUCTION
+            dual_enabled = bool(dual_task_var.get()) and not production_mode
+            dual_interval_mode = dual_interval_mode_var.get().strip().lower()
+            dual_interval = max(5, self.config.dual_task_interval_seconds)
+            dual_random_min = max(5, self.config.dual_task_random_min_seconds)
+            dual_random_max = max(dual_random_min, self.config.dual_task_random_max_seconds)
+            dual_timeout = max(1, self.config.dual_task_timeout_seconds)
+
+            if dual_enabled:
+                if dual_interval_mode not in VALID_DUAL_TASK_INTERVAL_MODES:
+                    status_var.set("Dual task interval mode is invalid.")
+                    return
+                try:
+                    dual_timeout = int(dual_timeout_var.get().strip())
+                except ValueError:
+                    status_var.set("Dual task timeout must be a whole number.")
+                    return
+                if dual_timeout < 1:
+                    status_var.set("Dual task timeout must be at least 1 second.")
+                    return
+
+                if dual_interval_mode == DUAL_TASK_INTERVAL_RANDOM:
+                    try:
+                        dual_random_min = int(dual_random_min_var.get().strip())
+                        dual_random_max = int(dual_random_max_var.get().strip())
+                    except ValueError:
+                        status_var.set("Random interval bounds must be whole numbers.")
+                        return
+                    if dual_random_min < 5:
+                        status_var.set("Random minimum interval must be at least 5 seconds.")
+                        return
+                    if dual_random_max < dual_random_min:
+                        status_var.set("Random maximum interval must be greater than or equal to the minimum.")
+                        return
+                else:
+                    try:
+                        dual_interval = int(dual_interval_var.get().strip())
+                    except ValueError:
+                        status_var.set("Regular interval must be a whole number.")
+                        return
+                    if dual_interval < 5:
+                        status_var.set("Regular interval must be at least 5 seconds.")
+                        return
+
             self._decision.config = replace(
                 self.config,
                 mode=mode,
                 session_duration_minutes=duration,
                 csv_enabled=bool(csv_var.get()),
                 influx_enabled=bool(influx_var.get()),
-                dual_task_enabled=False if mode == MODE_PRODUCTION else bool(dual_task_var.get()),
-                questionnaire_enabled=False if mode == MODE_PRODUCTION else bool(questionnaire_var.get()),
+                dual_task_enabled=dual_enabled,
+                questionnaire_enabled=False if production_mode else bool(questionnaire_var.get()),
+                dual_task_interval_seconds=dual_interval,
+                dual_task_interval_mode=dual_interval_mode,
+                dual_task_random_min_seconds=dual_random_min,
+                dual_task_random_max_seconds=dual_random_max,
+                dual_task_timeout_seconds=dual_timeout,
                 keyboard_tracking_enabled=bool(keyboard_var.get()),
                 mouse_tracking_enabled=bool(mouse_var.get()),
                 notification_tracking_enabled=bool(notification_var.get()),

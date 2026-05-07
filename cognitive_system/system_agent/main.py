@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import sys
 import time
 import uuid
@@ -24,7 +25,7 @@ LOGGER = logging.getLogger(__name__)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from system_agent.app_tracker import AppSnapshot, AppTracker
-from system_agent.config import RuntimeConfig, build_runtime_config
+from system_agent.config import DUAL_TASK_INTERVAL_RANDOM, RuntimeConfig, build_runtime_config
 from system_agent.context_tracker import ContextFrame, ContextTracker
 from system_agent.data_writer import DataWriter
 from system_agent.dependency_validation import validate_runtime_dependencies
@@ -488,11 +489,10 @@ class CognitiveSystemAgent:
             await asyncio.sleep(0.5)
 
     async def _dual_task_loop(self) -> None:
-        interval = max(5, self.config.dual_task_interval_seconds)
         timeout_ms = int(max(1, self.config.dual_task_timeout_seconds) * 1000)
 
         while self.session_manager.active:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(self._next_dual_task_interval_seconds())
             if not self.session_manager.active:
                 return
             snapshot = self.session_manager.snapshot()
@@ -521,6 +521,13 @@ class CognitiveSystemAgent:
             # Part 5: minimal validation — drop events without identity fields
             if dt_event.get("session_id") and dt_event.get("timestamp"):
                 self.data_writer.write_dual_task_event(dt_event)
+
+    def _next_dual_task_interval_seconds(self) -> int:
+        if self.config.dual_task_interval_mode == DUAL_TASK_INTERVAL_RANDOM:
+            lower = max(5, self.config.dual_task_random_min_seconds)
+            upper = max(lower, self.config.dual_task_random_max_seconds)
+            return random.randint(lower, upper)
+        return max(5, self.config.dual_task_interval_seconds)
 
     # ------------------------------------------------------------------
     # Utility helpers
@@ -692,6 +699,7 @@ class CognitiveSystemAgent:
             f"CSV export           : {self.config.csv_enabled}\n"
             f"Influx export        : {self.config.influx_enabled}\n"
             f"Dual-task            : {self.config.dual_task_enabled}\n"
+            f"Dual-task timing     : {self.config.dual_task_interval_mode}\n"
             f"Questionnaire        : {self.config.questionnaire_enabled}\n"
             f"Notifications        : {self.config.notification_tracking_enabled}\n"
             f"System metrics       : {self.config.system_metrics_enabled}\n"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import threading
 import time
 from dataclasses import dataclass
@@ -22,6 +23,27 @@ class DualTaskManager:
     run_probe() blocks the calling thread until the user clicks or the
     timeout fires, then returns a DualTaskResult.
     """
+
+    _WINDOW_WIDTH = 240
+    _WINDOW_HEIGHT = 160
+    _SCREEN_MARGIN = 24
+
+    def __init__(self) -> None:
+        self._last_position: tuple[int, int] | None = None
+
+    def _random_position(self, screen_width: int, screen_height: int) -> tuple[int, int]:
+        x_min = 0 if screen_width <= self._WINDOW_WIDTH + self._SCREEN_MARGIN * 2 else self._SCREEN_MARGIN
+        y_min = 0 if screen_height <= self._WINDOW_HEIGHT + self._SCREEN_MARGIN * 2 else self._SCREEN_MARGIN
+        x_max = max(x_min, screen_width - self._WINDOW_WIDTH - self._SCREEN_MARGIN)
+        y_max = max(y_min, screen_height - self._WINDOW_HEIGHT - self._SCREEN_MARGIN)
+
+        position = (random.randint(x_min, x_max), random.randint(y_min, y_max))
+        for _ in range(8):
+            if position != self._last_position:
+                break
+            position = (random.randint(x_min, x_max), random.randint(y_min, y_max))
+        self._last_position = position
+        return position
 
     def run_probe(self, probe_id: str, timeout_ms: int = 3000) -> DualTaskResult:
         result: dict = {
@@ -45,10 +67,10 @@ class DualTaskManager:
             # Always on top of every other window
             root.attributes("-topmost", True)
             root.resizable(False, False)
-            # Center on screen
             sw = root.winfo_screenwidth()
             sh = root.winfo_screenheight()
-            root.geometry(f"240x160+{sw // 2 - 120}+{sh // 2 - 80}")
+            x, y = self._random_position(sw, sh)
+            root.geometry(f"{self._WINDOW_WIDTH}x{self._WINDOW_HEIGHT}+{x}+{y}")
             root.configure(bg="#0c1223")
 
             start_ns = time.perf_counter_ns()

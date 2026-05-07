@@ -11,6 +11,9 @@ from typing import Any, Sequence
 MODE_EXPERIMENTAL = "experimental"
 MODE_PRODUCTION = "production"
 VALID_MODES = (MODE_EXPERIMENTAL, MODE_PRODUCTION)
+DUAL_TASK_INTERVAL_REGULAR = "regular"
+DUAL_TASK_INTERVAL_RANDOM = "random"
+VALID_DUAL_TASK_INTERVAL_MODES = (DUAL_TASK_INTERVAL_REGULAR, DUAL_TASK_INTERVAL_RANDOM)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -118,6 +121,9 @@ class RuntimeConfig:
     questionnaire_enabled: bool
     dual_task_interval_seconds: int
     dual_task_timeout_seconds: int
+    dual_task_interval_mode: str = DUAL_TASK_INTERVAL_REGULAR
+    dual_task_random_min_seconds: int = 15
+    dual_task_random_max_seconds: int = 60
     keyboard_tracking_enabled: bool = True
     mouse_tracking_enabled: bool = True
     notification_tracking_enabled: bool = True
@@ -232,6 +238,31 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         default=_env_int(
             "DUAL_TASK_INTERVAL_SECONDS",
             _shared_int(30, "agent", "dual_task_interval_seconds"),
+        ),
+    )
+    parser.add_argument(
+        "--dual-task-interval-mode",
+        type=str.lower,
+        choices=VALID_DUAL_TASK_INTERVAL_MODES,
+        default=(
+            os.environ.get("DUAL_TASK_INTERVAL_MODE")
+            or _shared_str(DUAL_TASK_INTERVAL_REGULAR, "agent", "dual_task_interval_mode")
+        ),
+    )
+    parser.add_argument(
+        "--dual-task-random-min-seconds",
+        type=int,
+        default=_env_int(
+            "DUAL_TASK_RANDOM_MIN_SECONDS",
+            _shared_int(15, "agent", "dual_task_random_min_seconds"),
+        ),
+    )
+    parser.add_argument(
+        "--dual-task-random-max-seconds",
+        type=int,
+        default=_env_int(
+            "DUAL_TASK_RANDOM_MAX_SECONDS",
+            _shared_int(60, "agent", "dual_task_random_max_seconds"),
         ),
     )
     parser.add_argument(
@@ -356,12 +387,35 @@ def build_runtime_config(argv: Sequence[str] | None = None) -> RuntimeConfig:
             questionnaire_enabled = _prompt_bool("Enable session-end questionnaire", questionnaire_enabled)
 
     dual_interval = args.dual_task_interval_seconds
+    dual_interval_mode = args.dual_task_interval_mode.strip().lower()
+    dual_random_min = args.dual_task_random_min_seconds
+    dual_random_max = args.dual_task_random_max_seconds
     dual_timeout = args.dual_task_timeout_seconds
+    if dual_interval_mode not in VALID_DUAL_TASK_INTERVAL_MODES:
+        raise ValueError(
+            f"Invalid dual-task interval mode: {dual_interval_mode!r}. "
+            f"Expected one of {VALID_DUAL_TASK_INTERVAL_MODES}."
+        )
     if dual_task_enabled and interactive:
-        dual_interval = _prompt_int("Dual-task interval (seconds)", dual_interval, min_value=5)
+        dual_interval_mode = _prompt_choice(
+            "Dual-task interval mode",
+            VALID_DUAL_TASK_INTERVAL_MODES,
+            dual_interval_mode,
+        )
+        if dual_interval_mode == DUAL_TASK_INTERVAL_RANDOM:
+            dual_random_min = _prompt_int("Dual-task random minimum interval (seconds)", dual_random_min, min_value=5)
+            dual_random_max = _prompt_int(
+                "Dual-task random maximum interval (seconds)",
+                dual_random_max,
+                min_value=dual_random_min,
+            )
+        else:
+            dual_interval = _prompt_int("Dual-task interval (seconds)", dual_interval, min_value=5)
         dual_timeout = _prompt_int("Dual-task timeout (seconds)", dual_timeout, min_value=1)
     elif dual_task_enabled:
         dual_interval = max(5, dual_interval)
+        dual_random_min = max(5, dual_random_min)
+        dual_random_max = max(dual_random_min, dual_random_max)
         dual_timeout = max(1, dual_timeout)
 
     config = RuntimeConfig(
@@ -373,6 +427,9 @@ def build_runtime_config(argv: Sequence[str] | None = None) -> RuntimeConfig:
         questionnaire_enabled=questionnaire_enabled,
         dual_task_interval_seconds=dual_interval,
         dual_task_timeout_seconds=dual_timeout,
+        dual_task_interval_mode=dual_interval_mode,
+        dual_task_random_min_seconds=dual_random_min,
+        dual_task_random_max_seconds=dual_random_max,
         keyboard_tracking_enabled=args.keyboard_tracking_enabled,
         mouse_tracking_enabled=args.mouse_tracking_enabled,
         notification_tracking_enabled=args.notification_tracking_enabled,
