@@ -22,6 +22,7 @@ MOUSE_FIELDS: List[str] = [
 
 LABEL_FIELDS: List[str] = [
     "timestamp", "session_id", "device_id",
+    "task_description",
     "mental_demand", "physical_demand", "temporal_demand",
     "performance", "effort", "frustration",
     "stress_self_report", "valence", "arousal", "notes",

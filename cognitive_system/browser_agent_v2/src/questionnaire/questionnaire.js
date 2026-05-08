@@ -36,6 +36,7 @@ form.addEventListener("submit", async (event) => {
 
   const results = {
     session_id: sessionId,
+    task_description: document.getElementById("task_description")?.value.trim() || "",
   };
   for (const name of sliderFields) {
     const input = document.getElementById(name);

@@ -57,6 +57,35 @@ h2:first-child {
 }
 
 /* ── Help icon + pure-CSS tooltip ──────────────────────────────────────────── */
+.text-field {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 18px;
+}
+
+.text-field label {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.text-field textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid #c8d9e8;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f8fbff;
+  color: #10283c;
+  font: inherit;
+  line-height: 1.4;
+}
+
+.text-field textarea:focus {
+  border-color: #1189be;
+  outline: 2px solid rgba(17, 137, 190, 0.16);
+}
+
 .help-icon {
   display: inline-block;
   margin-left: 5px;

@@ -124,6 +124,8 @@ Typical files:
 - `system_metrics.csv`
 - `labels.csv`
 
+`labels.csv` includes `task_description`, which stores the free-text context entered in the questionnaire.
+
 ## 6. Run The Feature Engineering Pipeline
 
 After a session finishes:

@@ -134,6 +134,47 @@ class DesktopQuestionnaireApp:
         outputs: dict[str, tk.Label] = {}
         slider_bg = "#ffffff"
 
+        context_card = tk.Frame(content, bg=slider_bg, pady=8)
+        context_card.pack(fill="x", pady=(0, 10))
+
+        tk.Label(
+            context_card,
+            text="Task description",
+            bg=slider_bg,
+            fg="#223346",
+            font=("Segoe UI", 11, "bold"),
+            anchor="w",
+        ).pack(fill="x")
+
+        tk.Label(
+            context_card,
+            text="Briefly describe what you were doing during this session.",
+            bg=slider_bg,
+            fg="#607188",
+            font=("Segoe UI", 9),
+            anchor="w",
+            justify="left",
+            wraplength=600,
+        ).pack(fill="x", pady=(2, 8))
+
+        task_description_input = tk.Text(
+            context_card,
+            height=4,
+            wrap="word",
+            bg="#f8fbff",
+            fg="#203243",
+            insertbackground="#203243",
+            relief="solid",
+            borderwidth=1,
+            highlightthickness=1,
+            highlightbackground="#d5deea",
+            highlightcolor="#7aa6dc",
+            font=("Segoe UI", 10),
+            padx=8,
+            pady=8,
+        )
+        task_description_input.pack(fill="x")
+
         for field in QUESTIONNAIRE_FIELDS:
             card = tk.Frame(content, bg=slider_bg, pady=8)
             card.pack(fill="x", pady=4)
@@ -220,6 +261,7 @@ class DesktopQuestionnaireApp:
             result.update(
                 {
                     "session_id": session_id,
+                    "task_description": task_description_input.get("1.0", "end").strip(),
                     **{field.key: int(variables[field.key].get()) for field in QUESTIONNAIRE_FIELDS},
                 }
             )

@@ -55,6 +55,7 @@ _NASA_TLX_COLUMNS = [
     "timestamp",
     "session_id",
     "device_id",
+    "task_description",
     "mental_demand",
     "physical_demand",
     "temporal_demand",
