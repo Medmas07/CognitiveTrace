@@ -12,11 +12,12 @@ import pandas as pd
 
 INTERNAL_PROCESS_NAMES = frozenset(
     {
-        "python.exe",
         "dual_task.exe",
         "behavior_collector.exe",
     }
 )
+PYTHON_PROCESS_NAME = "python.exe"
+DUAL_TASK_TITLE_TOKENS = ("dual task", "dual_task")
 
 BROWSER_PROCESS_NAMES = frozenset(
     {
@@ -53,6 +54,16 @@ def normalize_process_name(value: Any) -> str:
 
 def is_internal_app(app_name: Any) -> bool:
     return normalize_process_name(app_name) in INTERNAL_PROCESS_NAMES
+
+
+def is_internal_context(app_name: Any, window_title: Any = "", title: Any = "") -> bool:
+    process_name = normalize_process_name(app_name)
+    if process_name in INTERNAL_PROCESS_NAMES:
+        return True
+    if process_name != PYTHON_PROCESS_NAME:
+        return False
+    title_text = f"{window_title or ''} {title or ''}".strip().lower()
+    return any(token in title_text for token in DUAL_TASK_TITLE_TOKENS)
 
 
 def is_browser_app(app_name: Any) -> bool:

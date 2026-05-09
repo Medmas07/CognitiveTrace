@@ -21,7 +21,7 @@ import pandas as pd
 
 from .context_model import (
     context_from_json_series,
-    is_internal_app,
+    is_internal_context,
     resolve_context_from_payload,
     resolve_context_nodes_frame,
     resolve_context_node,
@@ -155,7 +155,7 @@ class GraphBuilder:
         )
         df = df[df["event_type"].isin(_CANONICAL_EVENT_TYPES)].copy()
         df = df.dropna(subset=["timestamp"])
-        df = df[~df["app_name"].map(is_internal_app)].copy()
+        df = df[~_internal_context_mask(df)].copy()
         if df.empty:
             return pd.DataFrame(columns=_EVENT_COLUMNS)
 
@@ -523,7 +523,7 @@ class GraphBuilder:
         scrolls = scrolls.dropna(subset=["timestamp"]).copy()
         if "app_name" not in scrolls.columns:
             scrolls["app_name"] = ""
-        scrolls = scrolls[~scrolls["app_name"].map(is_internal_app)].copy()
+        scrolls = scrolls[~_internal_context_mask(scrolls)].copy()
         if scrolls.empty:
             return {}
 
@@ -617,7 +617,7 @@ class GraphBuilder:
         for pos, row in enumerate(rows.to_dict("records")):
             context = contexts.iloc[pos].to_dict() if pos < len(contexts) else {}
             app_name = context.get("active_app") or context.get("app_name") or ""
-            if is_internal_app(app_name):
+            if is_internal_context(app_name, context.get("window_title", ""), context.get("title", "")):
                 node_ids.append("")
                 continue
             resolved = resolve_context_from_payload(context)
@@ -671,6 +671,22 @@ def _first_non_blank(series: pd.Series) -> str:
     if non_blank.empty:
         return ""
     return str(non_blank.iloc[0]).strip()
+
+
+def _internal_context_mask(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype=bool)
+    app_names = df.get("app_name", pd.Series("", index=df.index))
+    window_titles = df.get("window_title", pd.Series("", index=df.index))
+    titles = df.get("title", pd.Series("", index=df.index))
+    return pd.Series(
+        [
+            is_internal_context(app_name, window_title, title)
+            for app_name, window_title, title in zip(app_names, window_titles, titles)
+        ],
+        index=df.index,
+        dtype=bool,
+    )
 
 
 def _build_interval_node_lookup(events_df: pd.DataFrame):

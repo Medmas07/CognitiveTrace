@@ -132,6 +132,7 @@ class DesktopQuestionnaireApp:
 
         variables: dict[str, tk.IntVar] = {}
         outputs: dict[str, tk.Label] = {}
+        scales: dict[str, tk.Scale] = {}
         slider_bg = "#ffffff"
 
         context_card = tk.Frame(content, bg=slider_bg, pady=8)
@@ -221,6 +222,7 @@ class DesktopQuestionnaireApp:
                 fg="#223346",
             )
             scale.pack(side="left", fill="x", expand=True, padx=8)
+            scales[field.key] = scale
 
             tk.Label(row, text="100", bg=slider_bg, fg="#607188", width=4).pack(side="left")
             output = tk.Label(
@@ -257,12 +259,17 @@ class DesktopQuestionnaireApp:
             root.destroy()
 
         def _submit() -> None:
+            root.update_idletasks()
             submitted["value"] = True
+            slider_values = {
+                field.key: int(float(scales[field.key].get()))
+                for field in QUESTIONNAIRE_FIELDS
+            }
             result.update(
                 {
                     "session_id": session_id,
                     "task_description": task_description_input.get("1.0", "end").strip(),
-                    **{field.key: int(variables[field.key].get()) for field in QUESTIONNAIRE_FIELDS},
+                    **slider_values,
                 }
             )
             root.destroy()

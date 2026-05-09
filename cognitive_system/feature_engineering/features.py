@@ -22,7 +22,7 @@ from typing import Dict, Literal, Optional
 import numpy as np
 import pandas as pd
 
-from .context_model import context_from_json_series, is_internal_app
+from .context_model import context_from_json_series, is_internal_context
 from .windowing import WindowEngine
 
 LOGGER = logging.getLogger(__name__)
@@ -261,7 +261,7 @@ class FeatureExtractor:
         size_ms = size_s * 1_000.0
 
         if "app_name" in df.columns:
-            df = df[~df["app_name"].map(is_internal_app)].copy()
+            df = df[~self._internal_behavior_mask(df)].copy()
         if df.empty:
             return _zero_behavior()
 
@@ -416,10 +416,32 @@ class FeatureExtractor:
         contexts = context_from_json_series(df["context"])
         if contexts.empty or "active_app" not in contexts.columns:
             return df
-        internal_mask = contexts["active_app"].map(is_internal_app).fillna(False).to_numpy(dtype=bool)
+        window_titles = contexts.get("window_title", pd.Series("", index=contexts.index))
+        titles = contexts.get("title", pd.Series("", index=contexts.index))
+        internal_mask = pd.Series(
+            [
+                is_internal_context(app_name, window_title, title)
+                for app_name, window_title, title in zip(contexts["active_app"], window_titles, titles)
+            ],
+            index=df.index,
+            dtype=bool,
+        ).to_numpy(dtype=bool)
         if not internal_mask.any():
             return df
         return df.loc[~internal_mask].copy()
+
+    def _internal_behavior_mask(self, df: pd.DataFrame) -> pd.Series:
+        app_names = df.get("app_name", pd.Series("", index=df.index))
+        window_titles = df.get("window_title", pd.Series("", index=df.index))
+        titles = df.get("title", pd.Series("", index=df.index))
+        return pd.Series(
+            [
+                is_internal_context(app_name, window_title, title)
+                for app_name, window_title, title in zip(app_names, window_titles, titles)
+            ],
+            index=df.index,
+            dtype=bool,
+        )
 
 
 def _zero_behavior() -> dict[str, float]:
