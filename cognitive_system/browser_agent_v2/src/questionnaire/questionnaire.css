@@ -46,17 +46,28 @@ h2:first-child {
 
 .field {
   display: grid;
-  grid-template-columns: 230px 1fr 42px;
+  grid-template-columns: 1fr 42px;
   align-items: center;
-  gap: 12px;
-  margin: 10px 0;
+  gap: 6px 12px;
+  margin: 14px 0 18px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #edf3f8;
 }
 
 .field label {
+  grid-column: 1 / -1;
   font-size: 14px;
+  font-weight: 700;
 }
 
-/* ── Help icon + pure-CSS tooltip ──────────────────────────────────────────── */
+.field-help {
+  grid-column: 1 / -1;
+  margin: 0 0 4px;
+  color: #5f7285;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .text-field {
   display: grid;
   gap: 8px;
@@ -84,65 +95,6 @@ h2:first-child {
 .text-field textarea:focus {
   border-color: #1189be;
   outline: 2px solid rgba(17, 137, 190, 0.16);
-}
-
-.help-icon {
-  display: inline-block;
-  margin-left: 5px;
-  color: #1189be;
-  font-size: 13px;
-  line-height: 1;
-  cursor: default;
-  position: relative;
-  /* keyboard-accessible */
-  outline: none;
-}
-
-.help-icon::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  /* show above the icon by default; falls back gracefully near edges */
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: 270px;
-  background: #10283c;
-  color: #f0f7fc;
-  font-size: 12px;
-  font-weight: 400;
-  font-family: "Segoe UI", Tahoma, sans-serif;
-  line-height: 1.45;
-  padding: 9px 11px;
-  border-radius: 7px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
-  pointer-events: none;
-  white-space: normal;
-  z-index: 200;
-  /* hidden by default */
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-/* small arrow pointing down */
-.help-icon::before {
-  content: "";
-  position: absolute;
-  bottom: calc(100% + 3px);
-  left: 50%;
-  transform: translateX(-50%);
-  border: 5px solid transparent;
-  border-top-color: #10283c;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  z-index: 201;
-}
-
-.help-icon:hover::after,
-.help-icon:focus::after,
-.help-icon:hover::before,
-.help-icon:focus::before {
-  opacity: 1;
 }
 
 .field input[type="range"] {
@@ -184,7 +136,7 @@ button[type="submit"]:disabled {
 
 @media (max-width: 680px) {
   .field {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr 42px;
     gap: 6px;
   }
 
