@@ -17,6 +17,7 @@ except ImportError:  # handled by startup validation
     psutil = None  # type: ignore[assignment]
 
 from shared.time_utils import now_ns
+from system_agent.browser_url_resolver import BrowserUrlResolver
 
 LOGGER = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class AppSnapshot:
     window_title: str
     pid: int | None
     is_browser: bool
+    url: str = ""
 
     @property
     def app_name(self) -> str:
@@ -80,6 +82,7 @@ class AppTracker:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_snapshot: Optional[AppSnapshot] = None
+        self._url_resolver = BrowserUrlResolver()
 
         self._is_windows = platform.system().lower() == "windows"
         if not self._is_windows:
@@ -117,14 +120,20 @@ class AppTracker:
         previous = self._last_snapshot
         if previous is None:
             return True
-        # Emit only when the active *process* (app) changes.
-        # Ignoring window_title prevents high-frequency spam from browser tab
-        # title updates (e.g. YouTube progress, live dashboards).
+        elapsed_sec = (snapshot.timestamp_ns - previous.timestamp_ns) / 1_000_000_000
         if previous.process_name == snapshot.process_name:
+            if (
+                snapshot.is_browser
+                and elapsed_sec >= _MIN_CHANGE_INTERVAL_SEC
+                and (
+                    (snapshot.url and snapshot.url != previous.url)
+                    or (not snapshot.url and not previous.url and snapshot.window_title != previous.window_title)
+                )
+            ):
+                return True
             return False
         # Debounce: drop events that arrive faster than the minimum interval
         # even if the process name did change (rapid alt-tab sequences).
-        elapsed_sec = (snapshot.timestamp_ns - previous.timestamp_ns) / 1_000_000_000
         if elapsed_sec < _MIN_CHANGE_INTERVAL_SEC:
             return False
         return True
@@ -173,10 +182,14 @@ class AppTracker:
             except Exception:
                 process_name = "unknown"
 
+        is_browser = process_name in self._browser_processes
+        url = self._url_resolver.resolve(int(hwnd), process_name) if is_browser else ""
+
         return AppSnapshot(
             timestamp_ns=now_ns(),
             process_name=process_name,
             window_title=window_title,
             pid=proc_pid,
-            is_browser=process_name in self._browser_processes,
+            is_browser=is_browser,
+            url=url,
         )

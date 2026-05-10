@@ -193,7 +193,7 @@ class CognitiveSystemAgent:
                     device_id=self.config.device_id,
                     app_name=app_name,
                     window_title=current_snap.window_title if current_snap else "",
-                    url="",
+                    url=current_snap.url if current_snap else "",
                     tab_id="",
                     start_time=ts,
                 ))
@@ -357,7 +357,7 @@ class CognitiveSystemAgent:
                 device_id=self.config.device_id,
                 app_name=snapshot.app_name,
                 window_title=snapshot.window_title,
-                url="",
+                url=snapshot.url,
                 tab_id="",
                 start_time=ts,
             ))
@@ -396,7 +396,7 @@ class CognitiveSystemAgent:
             device_id=self.config.device_id,
             app_name=snap.app_name if snap else "unknown",
             window_title=snap.window_title if snap else "",
-            url="",
+            url=snap.url if snap else "",
             tab_id="",
             start_time=time.time(),
         ))
