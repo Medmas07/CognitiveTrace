@@ -42,6 +42,12 @@ _TAB_NODE = "#74d3ae"
 _APP_EDGE = "#4f7fc4"
 _TAB_EDGE = "#319f77"
 _APP_TAB_EDGE = "#c8863f"
+_EDGE_FAST = "#d95f59"
+_EDGE_MEDIUM = "#d99a2b"
+_EDGE_DEEP = "#5c73d8"
+_EDGE_PERSIST = "#2f9e83"
+_EDGE_MUTED = "#9aaabd"
+_EDGE_HOVER = "#1d2937"
 _TEXT = "#223346"
 _MUTED = "#607188"
 _PANEL_BG = "#eef4fb"
@@ -578,6 +584,8 @@ class SessionWindowGraphViewer:
         draw_state = self._draw_window_graph(canvas, window_graph, self.card_width, self.card_height)
         self._canvas_registry[canvas] = draw_state
         canvas.bind("<Button-1>", lambda event, c=canvas: self._on_canvas_click(event, c))
+        canvas.bind("<Motion>", lambda event, c=canvas: self._on_canvas_motion(event, c))
+        canvas.bind("<Leave>", lambda _event, c=canvas: self._on_canvas_leave(c))
 
         footer = tk.Frame(card, bg=_CARD_BG)
         footer.pack(fill="x", pady=(8, 0))
@@ -618,17 +626,19 @@ class SessionWindowGraphViewer:
         node_radius = 18
         edge_hits: list[dict[str, object]] = []
         node_hits: list[dict[str, object]] = []
+        _draw_edge_legend(canvas, width)
 
         for edge in window_graph.edges:
             x1, y1 = positions[edge.source_key]
             x2, y2 = positions[edge.target_key]
-            line_color = _edge_color(edge.edge_kind)
-            weight = edge.features.get("transition_count") or edge.features.get("switch_count") or 1
-            line_width = 1.5 + min(4.0, float(weight))
+            style = _edge_style(edge, window_graph.duration_seconds)
+            line_color = style["color"]
+            line_width = float(style["width"])
+            dash = style["dash"]
 
             if edge.source_key == edge.target_key:
                 loop_r = 16
-                canvas.create_arc(
+                item_id = canvas.create_arc(
                     x1 - loop_r,
                     y1 - loop_r - 22,
                     x1 + loop_r,
@@ -638,16 +648,20 @@ class SessionWindowGraphViewer:
                     style=tk.ARC,
                     outline=line_color,
                     width=line_width,
+                    dash=dash,
                 )
                 edge_hits.append(
                     {
                         "edge": edge,
                         "bbox": (x1 - loop_r, y1 - loop_r - 22, x1 + loop_r, y1 + loop_r - 4),
                         "self_loop": True,
+                        "items": [item_id],
+                        "stroke_items": [item_id],
+                        "style": style,
                     }
                 )
             else:
-                canvas.create_line(
+                item_id = canvas.create_line(
                     x1,
                     y1,
                     x2,
@@ -656,19 +670,33 @@ class SessionWindowGraphViewer:
                     width=line_width,
                     arrow=tk.LAST,
                     smooth=True,
+                    dash=dash,
                 )
                 edge_hits.append(
                     {
                         "edge": edge,
                         "segment": (x1, y1, x2, y2),
                         "self_loop": False,
+                        "items": [item_id],
+                        "stroke_items": [item_id],
+                        "style": style,
                     }
                 )
                 mx = (x1 + x2) / 2
                 my = (y1 + y2) / 2
                 label = _edge_label(edge)
-                canvas.create_rectangle(mx - 12, my - 9, mx + 12, my + 9, fill="#ffffff", outline="")
-                canvas.create_text(mx, my, text=label, fill=line_color, font=("Segoe UI", 8, "bold"))
+                if label:
+                    label_width = max(24, min(52, 10 + 7 * len(label)))
+                    rect_id = canvas.create_rectangle(
+                        mx - label_width / 2,
+                        my - 9,
+                        mx + label_width / 2,
+                        my + 9,
+                        fill="#ffffff",
+                        outline="",
+                    )
+                    text_id = canvas.create_text(mx, my, text=label, fill=line_color, font=("Segoe UI", 8, "bold"))
+                    edge_hits[-1]["items"].extend([rect_id, text_id])
 
         for node in window_graph.nodes:
             x, y = positions[node.key]
@@ -696,6 +724,8 @@ class SessionWindowGraphViewer:
                     "node_key": node.key,
                     "circle_bbox": canvas.bbox(oval_id),
                     "label_bbox": canvas.bbox(text_id),
+                    "items": [oval_id, text_id],
+                    "circle_item": oval_id,
                 }
             )
 
@@ -728,11 +758,15 @@ class SessionWindowGraphViewer:
                     continue
                 x1, y1, x2, y2 = bbox
                 if x1 <= x <= x2 and y1 <= y <= y2:
+                    self._select_node(canvas, state, node_hit)
                     self._show_node_details(window_graph, node_map[node_hit["node_key"]])
                     return
 
         for node_key, (nx, ny) in node_positions.items():
             if ((x - nx) ** 2 + (y - ny) ** 2) <= (node_radius ** 2):
+                node_hit = next((hit for hit in node_hits if hit.get("node_key") == node_key), None)
+                if node_hit:
+                    self._select_node(canvas, state, node_hit)
                 self._show_node_details(window_graph, node_map[node_key])
                 return
 
@@ -741,14 +775,96 @@ class SessionWindowGraphViewer:
             if edge_hit["self_loop"]:
                 x1, y1, x2, y2 = edge_hit["bbox"]
                 if x1 <= x <= x2 and y1 <= y <= y2:
+                    self._select_edge(canvas, state, edge_hit)
                     self._show_edge_details(window_graph, edge)
                     return
             else:
                 if _distance_to_segment(x, y, *edge_hit["segment"]) <= 10.0:
+                    self._select_edge(canvas, state, edge_hit)
                     self._show_edge_details(window_graph, edge)
                     return
 
+        self._clear_selection(canvas, state)
         self._show_window_details(window_graph)
+
+    def _on_canvas_motion(self, event, canvas) -> None:
+        state = self._canvas_registry.get(canvas)
+        if not state:
+            return
+        hit = self._hit_test_canvas(state, float(event.x), float(event.y))
+        previous = state.get("hover_hit")
+        if _same_canvas_hit(previous, hit):
+            return
+        self._clear_hover(canvas, state)
+        state["hover_hit"] = hit
+        if hit is None:
+            canvas.configure(cursor="")
+            return
+        canvas.configure(cursor="hand2")
+        if hit.get("kind") == "edge":
+            _configure_edge_hit(canvas, hit["edge_hit"], highlighted=True)
+        elif hit.get("kind") == "node":
+            _configure_node_hit(canvas, hit["node_hit"], highlighted=True)
+
+    def _on_canvas_leave(self, canvas) -> None:
+        state = self._canvas_registry.get(canvas)
+        if not state:
+            return
+        self._clear_hover(canvas, state)
+        canvas.configure(cursor="")
+
+    def _hit_test_canvas(self, state: dict[str, object], x: float, y: float) -> dict[str, object] | None:
+        node_hits: list[dict[str, object]] = state.get("node_hits", [])
+        for node_hit in node_hits:
+            for bbox_name in ("circle_bbox", "label_bbox"):
+                bbox = node_hit.get(bbox_name)
+                if not bbox:
+                    continue
+                x1, y1, x2, y2 = bbox
+                if x1 <= x <= x2 and y1 <= y <= y2:
+                    return {"kind": "node", "node_hit": node_hit}
+
+        for edge_hit in state.get("edge_hits", []):
+            if edge_hit["self_loop"]:
+                x1, y1, x2, y2 = edge_hit["bbox"]
+                if x1 <= x <= x2 and y1 <= y <= y2:
+                    return {"kind": "edge", "edge_hit": edge_hit}
+            elif _distance_to_segment(x, y, *edge_hit["segment"]) <= 10.0:
+                return {"kind": "edge", "edge_hit": edge_hit}
+        return None
+
+    def _clear_hover(self, canvas, state: dict[str, object]) -> None:
+        hit = state.pop("hover_hit", None)
+        if not hit:
+            return
+        selected = state.get("selected_hit")
+        if _same_canvas_hit(selected, hit):
+            return
+        if hit.get("kind") == "edge":
+            _configure_edge_hit(canvas, hit["edge_hit"], highlighted=False)
+        elif hit.get("kind") == "node":
+            _configure_node_hit(canvas, hit["node_hit"], highlighted=False)
+
+    def _clear_selection(self, canvas, state: dict[str, object]) -> None:
+        selected = state.pop("selected_hit", None)
+        if not selected:
+            return
+        if selected.get("kind") == "edge":
+            _configure_edge_hit(canvas, selected["edge_hit"], highlighted=False)
+        elif selected.get("kind") == "node":
+            _configure_node_hit(canvas, selected["node_hit"], highlighted=False)
+
+    def _select_edge(self, canvas, state: dict[str, object], edge_hit: dict[str, object]) -> None:
+        self._clear_selection(canvas, state)
+        selected = {"kind": "edge", "edge_hit": edge_hit}
+        state["selected_hit"] = selected
+        _configure_edge_hit(canvas, edge_hit, highlighted=True, selected=True)
+
+    def _select_node(self, canvas, state: dict[str, object], node_hit: dict[str, object]) -> None:
+        self._clear_selection(canvas, state)
+        selected = {"kind": "node", "node_hit": node_hit}
+        state["selected_hit"] = selected
+        _configure_node_hit(canvas, node_hit, highlighted=True, selected=True)
 
     def _show_window_details(self, window_graph: WindowGraphView) -> None:
         meta = (
@@ -775,7 +891,16 @@ class SessionWindowGraphViewer:
             f"{window_graph.window_id}   kind={edge.edge_kind}   "
             f"{edge.source_label} -> {edge.target_label}"
         )
-        self._show_info(f"Edge: {edge.source_label} -> {edge.target_label}", meta, edge.features)
+        style = _edge_style(edge, window_graph.duration_seconds)
+        features = dict(edge.features)
+        features.update(
+            {
+                "duration_band": style.get("duration_band"),
+                "visual_color": style.get("color"),
+                "visual_reason": style.get("style_reason"),
+            }
+        )
+        self._show_info(f"Edge: {edge.source_label} -> {edge.target_label}", meta, features)
 
     def _show_info(self, title: str, meta: str, features: dict[str, object]) -> None:
         self.selection_title_var.set(title)
@@ -827,7 +952,11 @@ class SessionWindowGraphViewer:
             highlightthickness=1,
         )
         graph_canvas.pack(fill="x", padx=14, pady=(0, 12))
-        self._draw_window_graph(graph_canvas, window_graph, 1100, 320)
+        detail_state = self._draw_window_graph(graph_canvas, window_graph, 1100, 320)
+        self._canvas_registry[graph_canvas] = detail_state
+        graph_canvas.bind("<Button-1>", lambda event, c=graph_canvas: self._on_canvas_click(event, c))
+        graph_canvas.bind("<Motion>", lambda event, c=graph_canvas: self._on_canvas_motion(event, c))
+        graph_canvas.bind("<Leave>", lambda _event, c=graph_canvas: self._on_canvas_leave(c))
 
         tables = tk.Frame(win, bg="#eef4fb", padx=14, pady=14)
         tables.pack(fill="both", expand=True)
@@ -1568,16 +1697,138 @@ def _arc_positions(
     return positions
 
 
+def _draw_edge_legend(canvas, width: int) -> None:
+    x = max(10, width - 174)
+    y = 10
+    items = [
+        (_EDGE_PERSIST, "persist"),
+        (_EDGE_FAST, "fast"),
+        (_EDGE_MEDIUM, "medium"),
+        (_EDGE_DEEP, "deep"),
+    ]
+    canvas.create_rectangle(x - 8, y - 5, width - 8, y + 20, fill="#ffffff", outline="#dbe4ef")
+    cursor_x = x
+    for color, label in items:
+        canvas.create_line(cursor_x, y + 7, cursor_x + 15, y + 7, fill=color, width=3)
+        canvas.create_text(cursor_x + 20, y + 7, text=label, anchor="w", fill=_MUTED, font=("Segoe UI", 7))
+        cursor_x += 42
+
+
+def _edge_style(edge: GraphEdgeView, window_duration_seconds: float) -> dict[str, object]:
+    edge_type = str(edge.features.get("edge_type") or edge.edge_kind)
+    count = max(1.0, _feature_float(edge.features.get("transition_count"), 1.0))
+    total_ms = max(0.0, _feature_float(edge.features.get("total_duration"), 0.0))
+    avg_ms = max(0.0, _feature_float(edge.features.get("avg_duration"), total_ms))
+    window_ms = max(1.0, window_duration_seconds * 1_000.0)
+
+    if edge_type == "persistence":
+        share = min(1.0, total_ms / window_ms)
+        color = _blend_hex(_EDGE_MUTED, _EDGE_PERSIST, max(0.25, share))
+        width = 1.5 + min(4.5, 4.0 * share + 0.35 * count)
+        return {
+            "color": color,
+            "width": width,
+            "dash": "",
+            "duration_band": "persistence",
+            "style_reason": f"persistence share {_format_value(share)}",
+        }
+
+    if avg_ms < 2_000:
+        color = _EDGE_FAST
+        band = "fast_switch"
+    elif avg_ms < 8_000:
+        color = _EDGE_MEDIUM
+        band = "medium_switch"
+    else:
+        color = _EDGE_DEEP
+        band = "deep_transition"
+
+    width = 1.6 + min(4.8, 0.85 * count + math.log1p(total_ms / 1_000.0) * 0.55)
+    return {
+        "color": color,
+        "width": width,
+        "dash": (5, 3) if count <= 1 else "",
+        "duration_band": band,
+        "style_reason": f"avg {_format_value(avg_ms / 1000.0)}s, count {int(count)}",
+    }
+
+
 def _edge_color(edge_kind: str) -> str:
     if edge_kind == "persistence":
-        return _TAB_EDGE
+        return _EDGE_PERSIST
     if edge_kind == "transition":
-        return _APP_EDGE
+        return _EDGE_MEDIUM
     return _APP_TAB_EDGE
 
 
 def _edge_label(edge: GraphEdgeView) -> str:
-    return str(edge.features.get("transition_count", ""))
+    count = _feature_float(edge.features.get("transition_count"), 0.0)
+    avg_ms = _feature_float(edge.features.get("avg_duration"), 0.0)
+    if count <= 0:
+        return ""
+    if avg_ms > 0:
+        return f"{int(count)}|{avg_ms / 1000.0:.1f}s"
+    return str(int(count))
+
+
+def _configure_edge_hit(canvas, edge_hit: dict[str, object], highlighted: bool, selected: bool = False) -> None:
+    style = edge_hit.get("style", {})
+    color = _EDGE_HOVER if highlighted else str(style.get("color", _EDGE_MUTED))
+    width = float(style.get("width", 2.0)) + (2.0 if selected else 1.1 if highlighted else 0.0)
+    for item_id in edge_hit.get("stroke_items", []):
+        item_type = canvas.type(item_id)
+        if item_type == "line":
+            canvas.itemconfigure(item_id, fill=color, width=width)
+        elif item_type == "arc":
+            canvas.itemconfigure(item_id, outline=color, width=width)
+
+
+def _configure_node_hit(canvas, node_hit: dict[str, object], highlighted: bool, selected: bool = False) -> None:
+    circle_item = node_hit.get("circle_item")
+    if circle_item is None:
+        return
+    outline = _EDGE_HOVER if highlighted else "#ffffff"
+    width = 4 if selected else 3 if highlighted else 2
+    canvas.itemconfigure(circle_item, outline=outline, width=width)
+
+
+def _same_canvas_hit(left: object, right: object) -> bool:
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return False
+    if left.get("kind") != right.get("kind"):
+        return False
+    if left.get("kind") == "edge":
+        return left.get("edge_hit") is right.get("edge_hit")
+    if left.get("kind") == "node":
+        return left.get("node_hit") is right.get("node_hit")
+    return False
+
+
+def _feature_float(value: object, default: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(result):
+        return default
+    return result
+
+
+def _blend_hex(left: str, right: str, amount: float) -> str:
+    amount = max(0.0, min(1.0, amount))
+
+    def _channels(color: str) -> tuple[int, int, int]:
+        text = color.lstrip("#")
+        return int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
+
+    l_r, l_g, l_b = _channels(left)
+    r_r, r_g, r_b = _channels(right)
+    mixed = (
+        round(l_r + (r_r - l_r) * amount),
+        round(l_g + (r_g - l_g) * amount),
+        round(l_b + (r_b - l_b) * amount),
+    )
+    return "#{:02x}{:02x}{:02x}".format(*mixed)
 
 
 def _window_footer_text(window_graph: WindowGraphView) -> str:
