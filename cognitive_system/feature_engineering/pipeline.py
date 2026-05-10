@@ -19,12 +19,15 @@ Pipeline stages
       f. Write  node_features/node_features_<label>.csv
 5. Build the session temporal graph from behavior events
 6. Build per-window temporal graph slices
-7. Cluster the primary window set using an in-memory merge of modality tables
+7. Export per-window JSON graphs into data_graph/data_graph_<label>/
+8. Cluster the primary window set using an in-memory merge of modality tables
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import math
 import shutil
 import sys
 import time
@@ -229,6 +232,139 @@ def _modality_output_path(features_dir: Path, modality: str, window_label: str) 
     return features_dir / modality / f"features_{modality}_{window_label}.csv"
 
 
+def _export_window_graph_jsons(
+    nodes_df: pd.DataFrame,
+    edges_df: pd.DataFrame,
+    temporal_edges_df: pd.DataFrame,
+    windows_df: pd.DataFrame,
+    out_dir: Path,
+) -> int:
+    """Write one JSON graph per analysis window."""
+
+    if out_dir.exists():
+        _safe_rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    node_rows = nodes_df.copy() if nodes_df is not None else pd.DataFrame()
+    edge_rows = edges_df.copy() if edges_df is not None else pd.DataFrame()
+    temporal_rows = temporal_edges_df.copy() if temporal_edges_df is not None else pd.DataFrame()
+    windows = windows_df.copy() if windows_df is not None else pd.DataFrame()
+
+    if windows.empty:
+        return 0
+
+    windows["window_id"] = windows["window_id"].astype(str)
+    for frame in (node_rows, edge_rows, temporal_rows):
+        if not frame.empty and "window_id" in frame.columns:
+            frame["window_id"] = frame["window_id"].astype(str)
+
+    written = 0
+    for index, window in enumerate(windows.sort_values(["window_start", "window_end"]).to_dict("records"), start=1):
+        window_id = str(window.get("window_id", ""))
+        graph_payload = {
+            "graph_id": f"graph_{index:03d}",
+            "window": _json_clean(window),
+            "nodes": [
+                _node_json_payload(row)
+                for row in _rows_for_window(node_rows, window_id)
+            ],
+            "edges": [
+                _edge_json_payload(row)
+                for row in _rows_for_window(edge_rows, window_id)
+            ],
+            "temporal_edges": [
+                _temporal_edge_json_payload(row)
+                for row in _rows_for_window(temporal_rows, window_id)
+            ],
+        }
+        path = out_dir / f"graph_{index:03d}.json"
+        path.write_text(
+            json.dumps(graph_payload, ensure_ascii=True, indent=2),
+            encoding="utf-8",
+        )
+        written += 1
+    return written
+
+
+def _rows_for_window(df: pd.DataFrame, window_id: str) -> list[dict[str, object]]:
+    if df is None or df.empty or "window_id" not in df.columns:
+        return []
+    rows = df[df["window_id"].astype(str).eq(window_id)]
+    return rows.to_dict("records")
+
+
+def _node_json_payload(row: dict[str, object]) -> dict[str, object]:
+    node_id = str(row.get("node_id", ""))
+    features = {
+        key: _json_clean(value)
+        for key, value in row.items()
+        if key not in {"window_id", "node_id"}
+    }
+    return {
+        "id": node_id,
+        "features": features,
+    }
+
+
+def _edge_json_payload(row: dict[str, object]) -> dict[str, object]:
+    transition_count = _json_number(row.get("transition_count"), default=1.0)
+    features = {
+        key: _json_clean(value)
+        for key, value in row.items()
+        if key not in {"window_id", "source", "target"}
+    }
+    return {
+        "source": _json_clean(row.get("source", "")),
+        "target": _json_clean(row.get("target", "")),
+        "weight": transition_count,
+        "features": features,
+    }
+
+
+def _temporal_edge_json_payload(row: dict[str, object]) -> dict[str, object]:
+    return {
+        key: _json_clean(value)
+        for key, value in row.items()
+        if key != "window_id"
+    }
+
+
+def _json_number(value: object, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(number) or math.isinf(number):
+        return default
+    if number.is_integer():
+        return int(number)
+    return number
+
+
+def _json_clean(value: object) -> object:
+    if value is None:
+        return None
+    if hasattr(value, "item"):
+        try:
+            value = value.item()
+        except Exception:
+            pass
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return int(value) if value.is_integer() else value
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
+
+
 class FeaturePipeline:
     """
     Orchestrates the full RAW -> FEATURES -> GRAPH pipeline for one session.
@@ -254,6 +390,7 @@ class FeaturePipeline:
         features_dir = session_dir / "features"
         node_features_dir = session_dir / "node_features"
         graph_dir = session_dir / "graph"
+        data_graph_dir = session_dir / "data_graph"
 
         features_dir.mkdir(parents=True, exist_ok=True)
         node_features_dir.mkdir(parents=True, exist_ok=True)
@@ -345,6 +482,17 @@ class FeaturePipeline:
                 out_dir = windows_root / wc.label
                 builder.export_windowed(window_nodes_df, window_edges_df, window_temporal_df, out_dir)
                 outputs[f"windowed_graph_{wc.label}"] = out_dir
+
+                json_out_dir = data_graph_dir / f"data_graph_{wc.label}"
+                json_count = _export_window_graph_jsons(
+                    window_nodes_df,
+                    window_edges_df,
+                    window_temporal_df,
+                    windows,
+                    json_out_dir,
+                )
+                outputs[f"data_graph_{wc.label}"] = json_out_dir
+                LOGGER.info("Graph JSON: wrote %d files to %s", json_count, json_out_dir)
 
             if primary_features is None or primary_features.empty:
                 for wc in self.config.window_configs:
