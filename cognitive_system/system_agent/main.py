@@ -680,15 +680,15 @@ class CognitiveSystemAgent:
                     )
 
             # GlobalHotKeys maps pynput key-combo strings to callbacks.
-            # Keep Ctrl+Shift+Q as a fallback; Ctrl+C is the requested quick trigger.
+            # Do not register Ctrl+C globally: browser copy actions must stay normal.
+            # Ctrl+C in the launch terminal is handled by KeyboardInterrupt instead.
             self._hotkey_listener = _pynput_kb.GlobalHotKeys(
                 {
-                    "<ctrl>+c": _trigger,
                     "<ctrl>+<shift>+q": _trigger,
                 }
             )
             self._hotkey_listener.start()
-            LOGGER.info("Questionnaire hotkeys registered: Ctrl+C and Ctrl+Shift+Q (pynput)")
+            LOGGER.info("Questionnaire hotkey registered: Ctrl+Shift+Q (pynput)")
         except Exception as exc:
             LOGGER.warning("Could not register questionnaire hotkey: %s", exc)
             self._hotkey_listener = None
@@ -732,7 +732,7 @@ class CognitiveSystemAgent:
             self.app_tracker.start()
             if wait_for_user_start:
                 self._print_banner()
-            self._setup_questionnaire_hotkey()  # Part 5: Ctrl+C / Ctrl+Shift+Q
+            self._setup_questionnaire_hotkey()  # Part 5: Ctrl+Shift+Q only
 
             if wait_for_user_start:
                 start = await self._wait_for_user_start()
@@ -743,7 +743,7 @@ class CognitiveSystemAgent:
             await self.start_session()
             if wait_for_user_start:
                 print("Session running. Recording pauses/resumes automatically with browser foreground.")
-                print("Use Ctrl+C to open the questionnaire and stop early.\n")
+                print("Use Ctrl+C in this terminal to open the questionnaire and stop early.\n")
             else:
                 LOGGER.info("Session running with launcher-managed startup.")
 
