@@ -9,12 +9,12 @@ Pipeline stages
 4. For each WindowConfig:
       a. Generate windows
       b. Extract modality-specific features per window
-      c. Normalize each modality table independently
-      d. Write:
+      c. Write raw, interpretable modality tables:
             features/behavior/features_behavior_<label>.csv
             features/keyboard/features_keyboard_<label>.csv
             features/mouse/features_mouse_<label>.csv
             features/system/features_system_<label>.csv
+      d. Normalize each modality table in memory for clustering
       e. Compute per-node window features
       f. Write  node_features/node_features_<label>.csv
 5. Build the session temporal graph from behavior events
@@ -293,13 +293,13 @@ class FeaturePipeline:
 
                 out_path = _modality_output_path(features_dir, modality, wc.label)
                 out_path.parent.mkdir(parents=True, exist_ok=True)
-                norm_df.to_csv(out_path, index=False)
+                raw_df.to_csv(out_path, index=False)
                 outputs[f"features_{modality}_{wc.label}"] = out_path
                 LOGGER.info(
                     "  Wrote %s: %d windows x %d cols",
                     out_path.name,
-                    len(norm_df),
-                    len(norm_df.columns),
+                    len(raw_df),
+                    len(raw_df.columns),
                 )
 
             combined_features = self._extractor.combine_modalities(modality_norm)
@@ -356,7 +356,13 @@ class FeaturePipeline:
                             for modality in MODALITY_FEATURE_COLUMNS
                             if _modality_output_path(features_dir, modality, wc.label).exists()
                         }
-                        primary_features = self._extractor.combine_modalities(modality_frames)
+                        modality_norm = {
+                            modality: Normalizer(self.config.normalization).fit_transform(frame)
+                            if frame is not None and not frame.empty
+                            else frame
+                            for modality, frame in modality_frames.items()
+                        }
+                        primary_features = self._extractor.combine_modalities(modality_norm)
                         LOGGER.warning(
                             "Primary window '%s' missing; using '%s' for clustering.",
                             self.config.primary_window_label,

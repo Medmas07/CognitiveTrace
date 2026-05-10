@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from .graph_builder import GraphBuilder
+from .interaction_features import KEYBOARD_METRIC_COLUMNS, MOUSE_METRIC_COLUMNS
 
 LOGGER = logging.getLogger(__name__)
 
@@ -43,6 +44,8 @@ NODE_FEATURE_COLUMNS = [
     "switch_in",
     "switch_out",
     "idle_segments",
+    *KEYBOARD_METRIC_COLUMNS,
+    *MOUSE_METRIC_COLUMNS,
 ]
 
 
@@ -127,13 +130,15 @@ def _finalize(df: pd.DataFrame) -> pd.DataFrame:
         "switch_out": 0,
         "idle_segments": 0,
     }
+    numeric_defaults.update({col: 0.0 for col in KEYBOARD_METRIC_COLUMNS})
+    numeric_defaults.update({col: 0.0 for col in MOUSE_METRIC_COLUMNS})
     for col, default in numeric_defaults.items():
         if col not in out.columns:
             out[col] = default
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(default)
     for col in ("path_depth", "keystrokes", "mouse_activity", "revisit_count", "switch_in", "switch_out", "idle_segments"):
         out[col] = out[col].astype(int)
-    for col in ("duration", "scroll_intensity", "scroll_depth"):
+    for col in ("duration", "scroll_intensity", "scroll_depth", *KEYBOARD_METRIC_COLUMNS, *MOUSE_METRIC_COLUMNS):
         out[col] = out[col].astype(float).round(4)
 
     text_cols = [

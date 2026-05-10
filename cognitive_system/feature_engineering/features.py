@@ -23,6 +23,12 @@ import numpy as np
 import pandas as pd
 
 from .context_model import context_from_json_series, is_internal_context
+from .interaction_features import (
+    KEYBOARD_METRIC_COLUMNS,
+    MOUSE_METRIC_COLUMNS,
+    compute_keyboard_metrics,
+    compute_mouse_metrics,
+)
 from .windowing import WindowEngine
 
 LOGGER = logging.getLogger(__name__)
@@ -43,8 +49,8 @@ class FeatureConfig:
 
 
 BEHAVIOR_FEATURE_COLUMNS = ["switch_rate", "focus_duration_ratio", "idle_ratio", "tab_count_mean", "scroll_intensity"]
-KEYBOARD_FEATURE_COLUMNS = ["keystroke_rate", "typing_burstiness", "pause_mean_duration"]
-MOUSE_FEATURE_COLUMNS = ["movement_speed_mean", "click_rate", "movement_entropy"]
+KEYBOARD_FEATURE_COLUMNS = list(KEYBOARD_METRIC_COLUMNS)
+MOUSE_FEATURE_COLUMNS = list(MOUSE_METRIC_COLUMNS)
 SYSTEM_FEATURE_COLUMNS = [
     "notification_rate",
     "interruption_density",
@@ -328,25 +334,11 @@ class FeatureExtractor:
         df = self._exclude_internal_context(df)
         if df.empty:
             return _zero_keyboard()
-
-        presses = df[df["event_type"] == "key_press"]
-        intervals = pd.to_numeric(presses.get("interval_ms", pd.Series(dtype=float)), errors="coerce").dropna()
-
-        keystroke_rate = len(presses) / size_s
-        if len(intervals) > 1:
-            mu = float(intervals.mean())
-            typing_burstiness = float(intervals.std()) / (mu + _EPS)
-        else:
-            typing_burstiness = 0.0
-
-        pauses = intervals[intervals > self.config.pause_threshold_ms]
-        pause_mean = float(pauses.mean()) if not pauses.empty else 0.0
-
-        return {
-            "keystroke_rate": keystroke_rate,
-            "typing_burstiness": typing_burstiness,
-            "pause_mean_duration": pause_mean,
-        }
+        return compute_keyboard_metrics(
+            df,
+            size_s,
+            pause_threshold_ms=self.config.pause_threshold_ms,
+        )
 
     def _mouse_features(self, df: pd.DataFrame, size_s: float) -> dict[str, float]:
         if df.empty or size_s <= 0:
@@ -354,36 +346,11 @@ class FeatureExtractor:
         df = self._exclude_internal_context(df)
         if df.empty:
             return _zero_mouse()
-
-        moves = df[df["event_type"] == "mouse_move"]
-        clicks = df[df["event_type"].isin(["button_press", "mouse_click", "click", "mouse_press"])]
-
-        speed = pd.to_numeric(moves.get("speed", pd.Series(dtype=float)), errors="coerce").dropna()
-        movement_speed_mean = float(speed.mean()) if not speed.empty else 0.0
-        click_rate = len(clicks) / size_s
-
-        movement_entropy = 0.0
-        if len(moves) > 1:
-            dx = pd.to_numeric(moves.get("delta_x", pd.Series(dtype=float)), errors="coerce").fillna(0).values
-            dy = pd.to_numeric(moves.get("delta_y", pd.Series(dtype=float)), errors="coerce").fillna(0).values
-            nonzero = (dx != 0) | (dy != 0)
-            if nonzero.sum() > 1:
-                angles = np.arctan2(dy[nonzero], dx[nonzero])
-                counts, _ = np.histogram(
-                    angles,
-                    bins=self.config.movement_entropy_bins,
-                    range=(-np.pi, np.pi),
-                )
-                total = counts.sum()
-                if total > 0:
-                    p = counts[counts > 0] / total
-                    movement_entropy = float(-np.sum(p * np.log2(p + _EPS)))
-
-        return {
-            "movement_speed_mean": movement_speed_mean,
-            "click_rate": click_rate,
-            "movement_entropy": movement_entropy,
-        }
+        return compute_mouse_metrics(
+            df,
+            size_s,
+            entropy_bins=self.config.movement_entropy_bins,
+        )
 
     def _notification_features(self, df: pd.DataFrame, size_s: float) -> dict[str, float]:
         if df.empty or size_s <= 0:

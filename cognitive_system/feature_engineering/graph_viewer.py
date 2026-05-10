@@ -98,6 +98,7 @@ class WindowGraphView:
     nodes: list[GraphNodeView]
     edges: list[GraphEdgeView]
     window_features: dict[str, object]
+    system_metrics: pd.DataFrame | None = None
 
     @property
     def duration_seconds(self) -> float:
@@ -175,8 +176,10 @@ def load_session_bundle(
         raw_ts = behavior_df["timestamp"].to_numpy(dtype=float, copy=False)
         keyboard_df = raw_streams.get("keyboard", pd.DataFrame())
         mouse_df = raw_streams.get("mouse", pd.DataFrame())
+        system_df = raw_streams.get("system_metrics", pd.DataFrame())
         keyboard_ts = keyboard_df["timestamp"].to_numpy(dtype=float, copy=False) if not keyboard_df.empty and "timestamp" in keyboard_df.columns else []
         mouse_ts = mouse_df["timestamp"].to_numpy(dtype=float, copy=False) if not mouse_df.empty and "timestamp" in mouse_df.columns else []
+        system_ts = system_df["timestamp"].to_numpy(dtype=float, copy=False) if not system_df.empty and "timestamp" in system_df.columns else []
         engine = WindowEngine()
 
         window_graphs: list[WindowGraphView] = []
@@ -202,6 +205,11 @@ def load_session_bundle(
                 mouse_slice = mouse_df.iloc[mouse_lo:mouse_hi].copy()
             else:
                 mouse_slice = pd.DataFrame()
+            if len(system_ts):
+                system_lo, system_hi = engine.window_slice_indices(system_ts, window_start, window_end)
+                system_slice = system_df.iloc[system_lo:system_hi].copy()
+            else:
+                system_slice = pd.DataFrame()
 
             window_graphs.append(
                 _build_window_graph(
@@ -213,6 +221,7 @@ def load_session_bundle(
                     raw_behavior_slice=raw_slice,
                     raw_keyboard_slice=keyboard_slice,
                     raw_mouse_slice=mouse_slice,
+                    raw_system_slice=system_slice,
                     tab_level=tab_level,
                     window_features=feature_row,
                     node_feature_map=node_feature_map,
@@ -606,6 +615,12 @@ class SessionWindowGraphViewer:
             command=lambda wg=window_graph: self._open_window_details(wg),
         ).pack(side="right")
 
+        ttk.Button(
+            footer,
+            text="System Pattern",
+            command=lambda wg=window_graph: self._open_system_pattern(wg),
+        ).pack(side="right", padx=(0, 6))
+
         return card
 
     def _draw_window_graph(self, canvas, window_graph: WindowGraphView, width: int, height: int) -> dict[str, object]:
@@ -994,6 +1009,87 @@ class SessionWindowGraphViewer:
         for edge in window_graph.edges:
             edge_tree.insert("", "end", values=(edge.edge_kind, edge.source_label, edge.target_label))
 
+    def _open_system_pattern(self, window_graph: WindowGraphView) -> None:
+        tk = self.tk
+        ttk = self.ttk
+
+        win = tk.Toplevel(self.root)
+        win.title(f"System Pattern - {window_graph.session_id} - {window_graph.window_id}")
+        win.geometry("980x640")
+        win.configure(bg="#eef4fb")
+
+        header = tk.Frame(win, bg="#eef4fb", padx=14, pady=12)
+        header.pack(fill="x")
+
+        tk.Label(
+            header,
+            text=f"{window_graph.session_id} / {window_graph.window_id}",
+            bg="#eef4fb",
+            fg=_TEXT,
+            font=("Segoe UI", 15, "bold"),
+        ).pack(anchor="w")
+
+        tk.Label(
+            header,
+            text=(
+                f"{window_graph.window_start:.3f} -> {window_graph.window_end:.3f}   "
+                f"duration={window_graph.duration_seconds:.2f}s"
+            ),
+            bg="#eef4fb",
+            fg=_MUTED,
+            font=("Segoe UI", 10),
+        ).pack(anchor="w", pady=(4, 0))
+
+        metrics = window_graph.system_metrics.copy() if window_graph.system_metrics is not None else pd.DataFrame()
+        chart = tk.Canvas(
+            win,
+            width=930,
+            height=390,
+            bg="#ffffff",
+            highlightbackground=_CARD_BORDER,
+            highlightthickness=1,
+        )
+        chart.pack(fill="x", padx=14, pady=(0, 12))
+        _draw_system_pattern_chart(
+            chart,
+            metrics,
+            window_graph.window_start,
+            window_graph.window_end,
+            width=930,
+            height=390,
+        )
+
+        summary_frame = tk.Frame(win, bg="#eef4fb", padx=14, pady=10)
+        summary_frame.pack(fill="both", expand=True)
+        tk.Label(
+            summary_frame,
+            text="Summary",
+            bg="#eef4fb",
+            fg=_TEXT,
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w")
+
+        tree = ttk.Treeview(summary_frame, columns=("metric", "mean", "max"), show="headings", height=6)
+        tree.heading("metric", text="metric")
+        tree.heading("mean", text="mean")
+        tree.heading("max", text="max")
+        tree.column("metric", width=180, anchor="w")
+        tree.column("mean", width=150, anchor="w")
+        tree.column("max", width=150, anchor="w")
+        tree.pack(fill="both", expand=True, pady=(6, 0))
+
+        for label, column in (
+            ("CPU %", "cpu_mean"),
+            ("RAM %", "ram_mean"),
+            ("Network bps", "network_rate_bps"),
+            ("Bytes in", "bytes_in"),
+            ("Bytes out", "bytes_out"),
+        ):
+            values = pd.to_numeric(metrics.get(column, pd.Series(dtype=float)), errors="coerce").dropna()
+            mean_value = float(values.mean()) if not values.empty else 0.0
+            max_value = float(values.max()) if not values.empty else 0.0
+            tree.insert("", "end", values=(label, _format_value(mean_value), _format_value(max_value)))
+
     def run(self) -> None:
         self.root.mainloop()
 
@@ -1127,6 +1223,7 @@ def _build_window_graph(
     raw_behavior_slice: pd.DataFrame,
     raw_keyboard_slice: pd.DataFrame,
     raw_mouse_slice: pd.DataFrame,
+    raw_system_slice: pd.DataFrame,
     tab_level: str,
     window_features: dict[str, object],
     node_feature_map: dict[tuple[str, str, str], dict[str, object]],
@@ -1140,6 +1237,7 @@ def _build_window_graph(
             nodes=[],
             edges=[],
             window_features=window_features,
+            system_metrics=raw_system_slice,
         )
 
     builder = GraphBuilder(node_level="app")
@@ -1158,6 +1256,7 @@ def _build_window_graph(
             nodes=[],
             edges=[],
             window_features=window_features,
+            system_metrics=raw_system_slice,
         )
 
     nodes: list[GraphNodeView] = []
@@ -1200,12 +1299,7 @@ def _build_window_graph(
                 source_label=source_label,
                 target_label=target_label,
                 edge_kind=edge_type,
-                features={
-                    "edge_type": edge_type,
-                    "transition_count": row.get("transition_count"),
-                    "total_duration": row.get("total_duration"),
-                    "avg_duration": row.get("avg_duration"),
-                },
+                features={key: row.get(key) for key in edges_df.columns if key not in {"source", "target"}},
             )
         )
 
@@ -1217,6 +1311,7 @@ def _build_window_graph(
         nodes=nodes,
         edges=edges,
         window_features=window_features,
+        system_metrics=raw_system_slice,
     )
 
 
@@ -1246,6 +1341,10 @@ def _build_context_feature_payload(
         "switch_out",
         "idle_segments",
     ]
+    for key in NODE_FEATURE_COLUMNS:
+        if key not in {"session_id", "window_id", "window_start", "window_end", "node_id", "node_type"}:
+            if key not in ordered_keys:
+                ordered_keys.append(key)
     exported = node_feature_map.get((window_id, node_id, node_type), {})
     payload = {key: row.get(key) for key in ordered_keys}
     payload.update({key: value for key, value in exported.items() if key in ordered_keys})
@@ -1698,10 +1797,11 @@ def _arc_positions(
 
 
 def _draw_edge_legend(canvas, width: int) -> None:
-    x = max(10, width - 174)
+    x = max(10, width - 218)
     y = 10
     items = [
         (_EDGE_PERSIST, "persist"),
+        ("#aa4c7a", "clip"),
         (_EDGE_FAST, "fast"),
         (_EDGE_MEDIUM, "medium"),
         (_EDGE_DEEP, "deep"),
@@ -1714,12 +1814,104 @@ def _draw_edge_legend(canvas, width: int) -> None:
         cursor_x += 42
 
 
+def _draw_system_pattern_chart(
+    canvas,
+    metrics: pd.DataFrame,
+    window_start: float,
+    window_end: float,
+    width: int,
+    height: int,
+) -> None:
+    canvas.delete("all")
+    if metrics is None or metrics.empty or "timestamp" not in metrics.columns:
+        canvas.create_text(
+            width / 2,
+            height / 2,
+            text="No system metrics for this window",
+            fill=_MUTED,
+            font=("Segoe UI", 11),
+        )
+        return
+
+    chart_specs = [
+        ("CPU %", "cpu_mean", "#d95f59"),
+        ("RAM %", "ram_mean", "#2f9e83"),
+        ("Network bps", "network_rate_bps", "#5c73d8"),
+    ]
+    metrics = metrics.copy()
+    metrics["timestamp"] = pd.to_numeric(metrics["timestamp"], errors="coerce")
+    metrics = metrics.dropna(subset=["timestamp"]).sort_values("timestamp")
+    if metrics.empty:
+        return
+
+    margin_left = 68
+    margin_right = 18
+    margin_top = 18
+    band_gap = 18
+    band_height = (height - (2 * margin_top) - (band_gap * (len(chart_specs) - 1))) / len(chart_specs)
+    plot_width = width - margin_left - margin_right
+    time_span = max(float(window_end) - float(window_start), 0.001)
+
+    for index, (label, column, color) in enumerate(chart_specs):
+        top = margin_top + index * (band_height + band_gap)
+        bottom = top + band_height
+        left = margin_left
+        right = margin_left + plot_width
+
+        canvas.create_rectangle(left, top, right, bottom, fill="#fbfdff", outline="#e1e9f3")
+        canvas.create_text(12, top + 12, text=label, anchor="w", fill=_TEXT, font=("Segoe UI", 9, "bold"))
+
+        values = pd.to_numeric(metrics.get(column, pd.Series(dtype=float)), errors="coerce")
+        plot_df = pd.DataFrame({"timestamp": metrics["timestamp"], "value": values}).dropna()
+        if plot_df.empty:
+            canvas.create_text((left + right) / 2, (top + bottom) / 2, text="N/A", fill=_MUTED)
+            continue
+
+        y_min = float(plot_df["value"].min())
+        y_max = float(plot_df["value"].max())
+        if math.isclose(y_min, y_max):
+            y_min = 0.0 if y_max >= 0 else y_max - 1.0
+            y_max = y_max + 1.0
+
+        points: list[float] = []
+        for row in plot_df.itertuples(index=False):
+            x = left + ((float(row.timestamp) - float(window_start)) / time_span) * plot_width
+            y = bottom - ((float(row.value) - y_min) / max(y_max - y_min, 0.001)) * (band_height - 16) - 8
+            x = max(left, min(right, x))
+            y = max(top + 8, min(bottom - 8, y))
+            points.extend([x, y])
+
+        canvas.create_text(left - 8, top + 8, text=_format_value(y_max), anchor="e", fill=_MUTED, font=("Segoe UI", 8))
+        canvas.create_text(left - 8, bottom - 8, text=_format_value(y_min), anchor="e", fill=_MUTED, font=("Segoe UI", 8))
+        if len(points) >= 4:
+            canvas.create_line(*points, fill=color, width=2, smooth=True)
+        else:
+            canvas.create_oval(points[0] - 3, points[1] - 3, points[0] + 3, points[1] + 3, fill=color, outline="")
+
+
 def _edge_style(edge: GraphEdgeView, window_duration_seconds: float) -> dict[str, object]:
     edge_type = str(edge.features.get("edge_type") or edge.edge_kind)
     count = max(1.0, _feature_float(edge.features.get("transition_count"), 1.0))
     total_ms = max(0.0, _feature_float(edge.features.get("total_duration"), 0.0))
     avg_ms = max(0.0, _feature_float(edge.features.get("avg_duration"), total_ms))
     window_ms = max(1.0, window_duration_seconds * 1_000.0)
+    clipboard_count = _feature_float(edge.features.get("copy_paste_count"), 0.0)
+    clipboard_activity = (
+        clipboard_count
+        + _feature_float(edge.features.get("copy_count"), 0.0)
+        + _feature_float(edge.features.get("cut_count"), 0.0)
+        + _feature_float(edge.features.get("paste_count"), 0.0)
+    )
+
+    if clipboard_activity > 0 or edge_type == "copy_paste":
+        width = 2.2 + min(5.0, clipboard_activity * 1.2)
+        return {
+            "color": "#aa4c7a",
+            "width": width,
+            "dash": (3, 2) if edge_type == "copy_paste" else "",
+            "duration_band": "clipboard_transfer",
+            "style_reason": f"clipboard activity {int(clipboard_activity)}, transfers {int(clipboard_count)}",
+        }
 
     if edge_type == "persistence":
         share = min(1.0, total_ms / window_ms)
@@ -1762,6 +1954,16 @@ def _edge_color(edge_kind: str) -> str:
 
 
 def _edge_label(edge: GraphEdgeView) -> str:
+    clipboard_count = _feature_float(edge.features.get("copy_paste_count"), 0.0)
+    if clipboard_count > 0:
+        return f"cp:{int(clipboard_count)}"
+    clipboard_activity = (
+        _feature_float(edge.features.get("copy_count"), 0.0)
+        + _feature_float(edge.features.get("cut_count"), 0.0)
+        + _feature_float(edge.features.get("paste_count"), 0.0)
+    )
+    if clipboard_activity > 0:
+        return f"clip:{int(clipboard_activity)}"
     count = _feature_float(edge.features.get("transition_count"), 0.0)
     avg_ms = _feature_float(edge.features.get("avg_duration"), 0.0)
     if count <= 0:

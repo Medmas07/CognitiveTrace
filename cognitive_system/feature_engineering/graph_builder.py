@@ -26,6 +26,14 @@ from .context_model import (
     resolve_context_nodes_frame,
     resolve_context_node,
 )
+from .interaction_features import (
+    EDGE_CLIPBOARD_FEATURE_COLUMNS,
+    KEYBOARD_METRIC_COLUMNS,
+    MOUSE_METRIC_COLUMNS,
+    compute_keyboard_metrics,
+    compute_mouse_metrics,
+    detect_clipboard_actions,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -76,6 +84,8 @@ _NODE_FEATURE_COLUMNS = [
     "switch_in",
     "switch_out",
     "idle_segments",
+    *KEYBOARD_METRIC_COLUMNS,
+    *MOUSE_METRIC_COLUMNS,
 ]
 _NODE_METADATA_COLUMNS = [
     "node_id",
@@ -91,7 +101,15 @@ _NODE_METADATA_COLUMNS = [
     "window_title",
 ]
 _GLOBAL_NODE_COLUMNS = [*_NODE_METADATA_COLUMNS, *_NODE_FEATURE_COLUMNS]
-_GLOBAL_EDGE_COLUMNS = ["source", "target", "edge_type", "transition_count", "total_duration", "avg_duration"]
+_GLOBAL_EDGE_COLUMNS = [
+    "source",
+    "target",
+    "edge_type",
+    "transition_count",
+    "total_duration",
+    "avg_duration",
+    *EDGE_CLIPBOARD_FEATURE_COLUMNS,
+]
 _GLOBAL_TEMPORAL_COLUMNS = ["source", "target", "edge_type", "timestamp"]
 _WINDOW_NODE_COLUMNS = ["window_id", *_GLOBAL_NODE_COLUMNS]
 _WINDOW_EDGE_COLUMNS = ["window_id", *_GLOBAL_EDGE_COLUMNS]
@@ -290,6 +308,7 @@ class GraphBuilder:
             )
 
         temporal_edges_df = transitions[["source", "target", "edge_type", "timestamp"]].reset_index(drop=True)
+        clipboard_features = self._build_clipboard_edge_features(keyboard_df, events_df)
         edges_df = (
             transitions.groupby(["source", "target", "edge_type"], as_index=False)
             .agg(
@@ -300,6 +319,7 @@ class GraphBuilder:
         )
         edges_df["total_duration"] = edges_df["total_duration"].round(2)
         edges_df["avg_duration"] = edges_df["avg_duration"].round(2)
+        edges_df = self._attach_clipboard_edge_features(edges_df, clipboard_features)
         return node_features, edges_df[_GLOBAL_EDGE_COLUMNS], temporal_edges_df[_GLOBAL_TEMPORAL_COLUMNS]
 
     def build_windowed(
@@ -489,6 +509,8 @@ class GraphBuilder:
         mouse_counts = self._build_mouse_count_map(mouse_df, events_df)
 
         duration_by_node = metadata.set_index("node_id")["duration"].to_dict()
+        keyboard_features = self._build_keyboard_feature_map(keyboard_df, events_df, duration_by_node)
+        mouse_features = self._build_mouse_feature_map(mouse_df, events_df, duration_by_node)
         metadata["scroll_intensity"] = metadata["node_id"].map(
             lambda node_id: round(
                 float(scroll_features.get(node_id, {}).get("scroll_total", 0.0))
@@ -501,6 +523,10 @@ class GraphBuilder:
         )
         metadata["keystrokes"] = metadata["node_id"].map(lambda node_id: int(keystroke_counts.get(node_id, 0)))
         metadata["mouse_activity"] = metadata["node_id"].map(lambda node_id: int(mouse_counts.get(node_id, 0)))
+        for col in KEYBOARD_METRIC_COLUMNS:
+            metadata[col] = metadata["node_id"].map(lambda node_id, feature=col: keyboard_features.get(node_id, {}).get(feature, 0.0))
+        for col in MOUSE_METRIC_COLUMNS:
+            metadata[col] = metadata["node_id"].map(lambda node_id, feature=col: mouse_features.get(node_id, {}).get(feature, 0.0))
 
         metadata["path_depth"] = pd.to_numeric(metadata["path_depth"], errors="coerce").fillna(0).astype(int)
         return metadata[_GLOBAL_NODE_COLUMNS].sort_values(["node_kind", "label", "node_id"]).reset_index(drop=True)
@@ -621,6 +647,30 @@ class GraphBuilder:
         keys = keys[keys["node_id"].astype(str).str.len().gt(0)]
         return keys.groupby("node_id").size().astype(int).to_dict() if not keys.empty else {}
 
+    def _build_keyboard_feature_map(
+        self,
+        keyboard_df: pd.DataFrame | None,
+        events_df: pd.DataFrame,
+        duration_by_node: dict[str, float],
+    ) -> dict[str, dict[str, float]]:
+        if keyboard_df is None or keyboard_df.empty or "timestamp" not in keyboard_df.columns:
+            return {}
+        keys = keyboard_df.copy()
+        keys["timestamp"] = pd.to_numeric(keys["timestamp"], errors="coerce")
+        keys = keys.dropna(subset=["timestamp"]).copy()
+        if keys.empty:
+            return {}
+        keys["node_id"] = self._resolve_context_json_nodes_with_interval_fallback(keys, events_df)
+        keys = keys[keys["node_id"].astype(str).str.len().gt(0)].copy()
+        if keys.empty:
+            return {}
+
+        features: dict[str, dict[str, float]] = {}
+        for node_id, group in keys.groupby("node_id"):
+            duration_s = max(float(duration_by_node.get(str(node_id), 0.0)), 0.001)
+            features[str(node_id)] = compute_keyboard_metrics(group, duration_s)
+        return features
+
     def _build_mouse_count_map(
         self,
         mouse_df: pd.DataFrame | None,
@@ -636,6 +686,149 @@ class GraphBuilder:
         mouse["node_id"] = self._resolve_context_json_nodes_with_interval_fallback(mouse, events_df)
         mouse = mouse[mouse["node_id"].astype(str).str.len().gt(0)]
         return mouse.groupby("node_id").size().astype(int).to_dict() if not mouse.empty else {}
+
+    def _build_mouse_feature_map(
+        self,
+        mouse_df: pd.DataFrame | None,
+        events_df: pd.DataFrame,
+        duration_by_node: dict[str, float],
+    ) -> dict[str, dict[str, float]]:
+        if mouse_df is None or mouse_df.empty or "timestamp" not in mouse_df.columns:
+            return {}
+        mouse = mouse_df.copy()
+        mouse["timestamp"] = pd.to_numeric(mouse["timestamp"], errors="coerce")
+        mouse = mouse.dropna(subset=["timestamp"]).copy()
+        if mouse.empty:
+            return {}
+        mouse["node_id"] = self._resolve_context_json_nodes_with_interval_fallback(mouse, events_df)
+        mouse = mouse[mouse["node_id"].astype(str).str.len().gt(0)].copy()
+        if mouse.empty:
+            return {}
+
+        features: dict[str, dict[str, float]] = {}
+        for node_id, group in mouse.groupby("node_id"):
+            duration_s = max(float(duration_by_node.get(str(node_id), 0.0)), 0.001)
+            features[str(node_id)] = compute_mouse_metrics(group, duration_s)
+        return features
+
+    def _build_clipboard_edge_features(
+        self,
+        keyboard_df: pd.DataFrame | None,
+        events_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        actions = detect_clipboard_actions(keyboard_df)
+        if actions.empty:
+            return pd.DataFrame(columns=["source", "target", *EDGE_CLIPBOARD_FEATURE_COLUMNS])
+
+        actions["node_id"] = self._resolve_context_json_nodes_with_interval_fallback(actions, events_df)
+        actions = actions[actions["node_id"].astype(str).str.len().gt(0)].copy()
+        if actions.empty:
+            return pd.DataFrame(columns=["source", "target", *EDGE_CLIPBOARD_FEATURE_COLUMNS])
+
+        pending_copy: dict[str, object] | None = None
+        transfers: list[dict[str, object]] = []
+        for row in actions.sort_values("timestamp").to_dict("records"):
+            action = str(row.get("action") or "")
+            node_id = str(row.get("node_id") or "")
+            if action in {"copy", "cut"}:
+                pending_copy = row
+                if node_id:
+                    transfers.append(
+                        {
+                            "source": node_id,
+                            "target": node_id,
+                            "copy_count": 1.0 if action == "copy" else 0.0,
+                            "cut_count": 1.0 if action == "cut" else 0.0,
+                            "paste_count": 0.0,
+                            "copy_paste_count": 0.0,
+                            "copy_paste_latency_ms": 0.0,
+                        }
+                    )
+                continue
+            if action != "paste" or pending_copy is None:
+                if action == "paste" and node_id:
+                    transfers.append(
+                        {
+                            "source": node_id,
+                            "target": node_id,
+                            "copy_count": 0.0,
+                            "cut_count": 0.0,
+                            "paste_count": 1.0,
+                            "copy_paste_count": 0.0,
+                            "copy_paste_latency_ms": 0.0,
+                        }
+                    )
+                continue
+
+            source = str(pending_copy.get("node_id") or "")
+            target = node_id
+            if not source or not target:
+                continue
+            copy_time = float(pending_copy.get("timestamp", 0.0))
+            paste_time = float(row.get("timestamp", 0.0))
+            transfers.append(
+                {
+                    "source": source,
+                    "target": target,
+                    "copy_count": 1.0 if pending_copy.get("action") == "copy" else 0.0,
+                    "cut_count": 1.0 if pending_copy.get("action") == "cut" else 0.0,
+                    "paste_count": 1.0,
+                    "copy_paste_count": 1.0,
+                    "copy_paste_latency_ms": max(0.0, (paste_time - copy_time) * 1_000.0),
+                }
+            )
+
+        if not transfers:
+            return pd.DataFrame(columns=["source", "target", *EDGE_CLIPBOARD_FEATURE_COLUMNS])
+
+        transfer_df = pd.DataFrame(transfers)
+        transfer_df.loc[
+            pd.to_numeric(transfer_df["copy_paste_count"], errors="coerce").fillna(0.0).le(0.0),
+            "copy_paste_latency_ms",
+        ] = np.nan
+        grouped = (
+            transfer_df.groupby(["source", "target"], as_index=False)
+            .agg(
+                copy_count=("copy_count", "sum"),
+                cut_count=("cut_count", "sum"),
+                paste_count=("paste_count", "sum"),
+                copy_paste_count=("copy_paste_count", "sum"),
+                copy_paste_latency_mean_ms=("copy_paste_latency_ms", "mean"),
+            )
+        )
+        grouped["copy_paste_latency_mean_ms"] = grouped["copy_paste_latency_mean_ms"].fillna(0.0).round(2)
+        return grouped[["source", "target", *EDGE_CLIPBOARD_FEATURE_COLUMNS]]
+
+    def _attach_clipboard_edge_features(
+        self,
+        edges_df: pd.DataFrame,
+        clipboard_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        edges = edges_df.copy() if edges_df is not None else pd.DataFrame(columns=_GLOBAL_EDGE_COLUMNS)
+        if clipboard_df is None or clipboard_df.empty:
+            for col in EDGE_CLIPBOARD_FEATURE_COLUMNS:
+                edges[col] = 0.0
+            return edges
+
+        merged = edges.merge(clipboard_df, on=["source", "target"], how="left")
+        for col in EDGE_CLIPBOARD_FEATURE_COLUMNS:
+            merged[col] = pd.to_numeric(merged.get(col, 0.0), errors="coerce").fillna(0.0)
+
+        existing_pairs = set(zip(merged["source"].astype(str), merged["target"].astype(str)))
+        clipboard_only = clipboard_df[
+            ~clipboard_df.apply(lambda row: (str(row["source"]), str(row["target"])) in existing_pairs, axis=1)
+        ].copy()
+        if not clipboard_only.empty:
+            for col, value in {
+                "edge_type": "copy_paste",
+                "transition_count": 0,
+                "total_duration": 0.0,
+                "avg_duration": 0.0,
+            }.items():
+                clipboard_only[col] = value
+            merged = pd.concat([merged, clipboard_only[_GLOBAL_EDGE_COLUMNS]], ignore_index=True)
+
+        return merged[_GLOBAL_EDGE_COLUMNS]
 
     def _resolve_row_nodes_with_interval_fallback(
         self,
