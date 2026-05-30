@@ -23,6 +23,7 @@ class SessionSnapshot:
     remaining_time: float
     duration: int
     recording_active: bool
+    manual_paused: bool
 
     def to_dict(self) -> dict:
         return {
@@ -33,6 +34,7 @@ class SessionSnapshot:
             "remaining_time": round(self.remaining_time, 1),
             "duration": self.duration,
             "recording_active": self.recording_active,
+            "manual_paused": self.manual_paused,
         }
 
 
@@ -45,6 +47,9 @@ class SessionManager:
         self._session_id: Optional[str] = None
         self._start_monotonic: Optional[float] = None
         self._active = False
+        self._paused_total = 0.0
+        self._manual_paused = False
+        self._manual_pause_started: Optional[float] = None
 
         self._browser_foreground = False
         self._recording_active = False
@@ -58,6 +63,10 @@ class SessionManager:
     def active(self) -> bool:
         return self._active
 
+    @property
+    def manual_paused(self) -> bool:
+        return self._manual_paused
+
     def start_session(self) -> str:
         if self._active:
             raise RuntimeError("Session already active.")
@@ -66,6 +75,9 @@ class SessionManager:
         self._session_id = f"session_{ts}_{uuid.uuid4().hex[:6]}"
         self._start_monotonic = time.monotonic()
         self._active = True
+        self._paused_total = 0.0
+        self._manual_paused = False
+        self._manual_pause_started = None
 
         self._recording_active = False
         self._recording_started_once = False
@@ -78,6 +90,9 @@ class SessionManager:
         self._active = False
         self._session_id = None
         self._start_monotonic = None
+        self._paused_total = 0.0
+        self._manual_paused = False
+        self._manual_pause_started = None
         self._recording_active = False
         self._recording_started_once = False
         return session_id
@@ -90,6 +105,8 @@ class SessionManager:
         """
         self._browser_foreground = bool(is_foreground)
         if not self._active:
+            return None
+        if self._manual_paused:
             return None
 
         if self._browser_foreground and not self._recording_active:
@@ -105,10 +122,44 @@ class SessionManager:
 
         return None
 
+    def set_manual_paused(self, paused: bool) -> Optional[str]:
+        """Pause/resume the session clock and recording because the user asked for it."""
+        if not self._active:
+            return None
+
+        paused = bool(paused)
+        if paused == self._manual_paused:
+            return None
+
+        now = time.monotonic()
+        if paused:
+            self._manual_paused = True
+            self._manual_pause_started = now
+            if self._recording_active:
+                self._recording_active = False
+                return "pause_recording"
+            return None
+
+        if self._manual_pause_started is not None:
+            self._paused_total += max(0.0, now - self._manual_pause_started)
+        self._manual_paused = False
+        self._manual_pause_started = None
+
+        if self._browser_foreground and not self._recording_active:
+            self._recording_active = True
+            if not self._recording_started_once:
+                self._recording_started_once = True
+                return "start_recording"
+            return "resume_recording"
+        return None
+
     def get_elapsed(self) -> float:
         if not self._active or self._start_monotonic is None:
             return 0.0
-        return max(0.0, time.monotonic() - self._start_monotonic)
+        paused_now = 0.0
+        if self._manual_paused and self._manual_pause_started is not None:
+            paused_now = max(0.0, time.monotonic() - self._manual_pause_started)
+        return max(0.0, time.monotonic() - self._start_monotonic - self._paused_total - paused_now)
 
     def get_remaining(self) -> float:
         return max(0.0, self._duration_seconds - self.get_elapsed())
@@ -126,6 +177,7 @@ class SessionManager:
                 remaining_time=0.0,
                 duration=self._duration_seconds,
                 recording_active=False,
+                manual_paused=False,
             )
 
         state = SessionState.RUNNING.value if self._recording_active else SessionState.PAUSED.value
@@ -137,5 +189,6 @@ class SessionManager:
             remaining_time=self.get_remaining(),
             duration=self._duration_seconds,
             recording_active=self._recording_active,
+            manual_paused=self._manual_paused,
         )
 

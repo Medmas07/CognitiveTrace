@@ -100,6 +100,8 @@ What happens at runtime:
 - the system agent owns session timing
 - the extension only records when the agent instructs it to
 - browser recording pauses and resumes based on browser foreground status
+- click the overlay `||` button to manually pause the whole session; it changes to `>` while paused
+- manual pause freezes the session timer and stops collection until you resume
 - dual-task probes may appear depending on the selected mode, with randomized timing and position
 - the questionnaire is opened by the agent at session end when enabled
 - the popup should show `online` once the extension connects to the running desktop app

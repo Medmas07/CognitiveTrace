@@ -133,7 +133,7 @@ class CognitiveSystemAgent:
 
     async def _handle_browser_events(self, events: list[dict]) -> None:
         current_session = self.session_manager.session_id
-        if not current_session:
+        if not current_session or self.session_manager.manual_paused:
             return
 
         current_snap = self._latest_app_snapshot
@@ -287,7 +287,7 @@ class CognitiveSystemAgent:
 
     def _on_context_finalized(self, event: dict) -> None:
         """Receive a finalized context event and persist it to behavior.csv."""
-        if not self.session_manager.active:
+        if not self.session_manager.active or self.session_manager.manual_paused:
             return
         if _validate_behavior_event(event):
             self.data_writer.write_behavior_event(event)
@@ -297,12 +297,12 @@ class CognitiveSystemAgent:
     # ------------------------------------------------------------------
 
     def _handle_keyboard_event(self, event: dict) -> None:
-        if not self.session_manager.active:
+        if not self.session_manager.active or self.session_manager.manual_paused:
             return
         self.data_writer.write_keyboard_event(event)
 
     def _handle_notification_event(self, event: dict) -> None:
-        if not self.session_manager.active:
+        if not self.session_manager.active or self.session_manager.manual_paused:
             return
         event.setdefault("session_id", self.session_manager.session_id)
         event.setdefault("device_id", self.config.device_id)
@@ -310,14 +310,14 @@ class CognitiveSystemAgent:
         self.data_writer.write_notification_event(event)
 
     def _handle_system_metrics_event(self, event: dict) -> None:
-        if not self.session_manager.active:
+        if not self.session_manager.active or self.session_manager.manual_paused:
             return
         event.setdefault("session_id", self.session_manager.session_id)
         event.setdefault("device_id", self.config.device_id)
         self.data_writer.write_system_metrics_event(event)
 
     def _handle_mouse_event(self, event: dict) -> None:
-        if not self.session_manager.active:
+        if not self.session_manager.active or self.session_manager.manual_paused:
             return
         self.data_writer.write_mouse_event(event)
 
@@ -327,6 +327,12 @@ class CognitiveSystemAgent:
                 lambda: asyncio.create_task(
                     self.stop_session(reason="user_overlay_stop")
                 )
+            )
+
+    def _on_overlay_pause_toggle_requested(self) -> None:
+        if self.loop:
+            self.loop.call_soon_threadsafe(
+                lambda: asyncio.create_task(self._toggle_manual_pause())
             )
 
     def _on_active_app_change(self, snapshot: AppSnapshot) -> None:
@@ -346,6 +352,9 @@ class CognitiveSystemAgent:
 
         command = self.session_manager.set_browser_foreground(snapshot.is_browser)
         session_id = self.session_manager.session_id
+        if self.session_manager.manual_paused:
+            await self._broadcast_status()
+            return
 
         # Switch the active context to the newly focused app.
         # ContextTracker closes the old context (emitting a finalized event with
@@ -365,6 +374,56 @@ class CognitiveSystemAgent:
         if command:
             await self._send_recording_command(command)
         await self._broadcast_status()
+
+    async def _toggle_manual_pause(self) -> None:
+        if not self.session_manager.active:
+            return
+        if self.session_manager.manual_paused:
+            await self._resume_manual_pause()
+        else:
+            await self._enter_manual_pause()
+
+    async def _enter_manual_pause(self) -> None:
+        if not self.session_manager.active or self.session_manager.manual_paused:
+            return
+
+        # Close the current context before pausing so the active interval is saved
+        # and the paused gap is not counted as node duration.
+        self._context_tracker.force_close()
+        command = self.session_manager.set_manual_paused(True)
+        if command:
+            await self._send_recording_command(command)
+        await self._broadcast_status()
+        if self._ui_overlay:
+            snap = self.session_manager.snapshot()
+            self._ui_overlay.update(snap.state, snap.elapsed_time, snap.manual_paused)
+        print("\n[SESSION PAUSED]\n")
+
+    async def _resume_manual_pause(self) -> None:
+        if not self.session_manager.active or not self.session_manager.manual_paused:
+            return
+
+        command = self.session_manager.set_manual_paused(False)
+        session_id = self.session_manager.session_id
+        if session_id:
+            snap = self._latest_app_snapshot
+            self._context_tracker.open_context(ContextFrame(
+                session_id=session_id,
+                device_id=self.config.device_id,
+                app_name=snap.app_name if snap else "unknown",
+                window_title=snap.window_title if snap else "",
+                url=snap.url if snap else "",
+                tab_id="",
+                start_time=time.time(),
+            ))
+
+        if command:
+            await self._send_recording_command(command)
+        await self._broadcast_status()
+        if self._ui_overlay:
+            snap = self.session_manager.snapshot()
+            self._ui_overlay.update(snap.state, snap.elapsed_time, snap.manual_paused)
+        print("\n[SESSION RESUMED]\n")
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -387,7 +446,10 @@ class CognitiveSystemAgent:
         self._notification_tracker.start()
         self._system_metrics.start()
         if self._ui_overlay:
-            self._ui_overlay.start(on_stop_requested=self._on_overlay_stop_requested)
+            self._ui_overlay.start(
+                on_stop_requested=self._on_overlay_stop_requested,
+                on_pause_toggle_requested=self._on_overlay_pause_toggle_requested,
+            )
 
         # Open the initial context so the very first interval has a start_time.
         snap = self._latest_app_snapshot
@@ -465,7 +527,7 @@ class CognitiveSystemAgent:
             self.data_writer.end_session()
 
         if self._ui_overlay:
-            self._ui_overlay.update("stopped", 0.0)
+            self._ui_overlay.update("stopped", 0.0, False)
 
         self._session_finished.set()
         print(f"[SESSION STOPPED] reason={reason}\n")
@@ -478,9 +540,8 @@ class CognitiveSystemAgent:
             secs = int(remaining) % 60
             print(f"\rTime left: {mins:02d}:{secs:02d}  ", end="", flush=True)
             if self._ui_overlay:
-                elapsed = max(0.0, self.config.session_duration_seconds - remaining)
                 snap = self.session_manager.snapshot()
-                self._ui_overlay.update(snap.state, elapsed)
+                self._ui_overlay.update(snap.state, snap.elapsed_time, snap.manual_paused)
             await asyncio.sleep(self.config.session_broadcast_interval)
 
     async def _session_watchdog_loop(self) -> None:
@@ -512,6 +573,9 @@ class CognitiveSystemAgent:
                     randomize_position=self.config.dual_task_randomize_position,
                 ),
             )
+            if not self.session_manager.active or self.session_manager.manual_paused:
+                continue
+            snapshot = self.session_manager.snapshot()
             if not snapshot.session_id:
                 continue
             current_snap = self._latest_app_snapshot
