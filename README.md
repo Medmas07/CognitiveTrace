@@ -1,6 +1,6 @@
-# Behavior User Collecting
+# CognitiveTrace
 
-Behavior User Collecting is a desktop-plus-browser data collection project.
+CognitiveTrace is a desktop-plus-browser data collection project.
 
 It includes:
 
